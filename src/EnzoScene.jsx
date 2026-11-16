@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createScene, DEFAULT_PARAMS } from './lib/scene.ts'
 import { createFlameLayer } from './lib/flame-layer.ts'
+import { createGpuWorld } from './lib/gpu-world.ts'
 
 const KEYS = Object.keys(DEFAULT_PARAMS)
 
@@ -82,6 +83,11 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
     if (!ctx) return
     const scene = createScene(paramsRef.current)
     sceneRef.current = scene
+    // the ground and clouds are drawn on the graphics card when it can (add ?cpu to the address to
+    // draw them on the CPU instead)
+    const gpu = new URLSearchParams(window.location.search).has('cpu') ? null : createGpuWorld()
+    scene.setGpu(gpu)
+    if (import.meta.env.DEV) window.enzoScene = scene
     let image = null
     const fire = fireRef.current
     let layer = null
@@ -254,6 +260,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       window.clearTimeout(hintTimer.current)
       fire?.removeEventListener('webglcontextlost', onFireLost)
       layer?.dispose()
+      gpu?.dispose()
       sceneRef.current = null
     }
   }, [])

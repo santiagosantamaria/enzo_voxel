@@ -941,6 +941,13 @@ export function createScene(initial) {
   const houseMap = new Uint16Array(N * N) // 0 empty, else house id
   const cloudN = new Uint8Array(NC * NC)
   const nz = new Uint8Array(256 * 256)
+  // what the GPU needs of the world (gpu-world.ts). stamp changes when the world is rebuilt; dirty
+  // holds row ranges (y0, y1 pairs) of the height and material maps changed since, by bombs.
+  const GW = {
+    heightMap, matMap, cloudN, nz, stamp: 0, dirty: [],
+    bloom: BLOOM, windowMat: WINDOW_MAT, // per material: a flower drawn as a bloom; a wall with shutters
+    consts: { N, NC, CLOUD_ALT, CK, ZTOP, FLOOR_H, JET_W, JET_L, PIV_K, EPS, FOG_STEPS },
+  }
   let spawnX = N / 2
   let spawnY = N / 2
   const houses = []
@@ -1092,6 +1099,8 @@ export function createScene(initial) {
     placeBoats(rnd)
     placeLife(rnd)
     placeBirds(mulberry32((p.seed | 0) * 4513 + 29)) // its own random stream, so the clouds stay put
+    GW.stamp++
+    GW.dirty.length = 0
     worldLog.info('built', {
       islands: bigIsle.length,
       specks: speckN,
@@ -2584,6 +2593,7 @@ export function createScene(initial) {
         }
       }
     }
+    GW.dirty.push(house.y - 1, house.y + house.d)
     for (let i = 0; i < 28; i++) {
       const a = (i / 28) * Math.PI * 2 + hash8(id * 19 + i) * 0.02
       const sp = 18 + (hash8(id * 7 + i) / 255) * 38
@@ -2629,6 +2639,7 @@ export function createScene(initial) {
         else if (isGreen(m) && d2 < r * r * 0.85) matMap[o] = 24
       }
     }
+    GW.dirty.push(gy - r, gy + r)
     // statues, benches, urns and fountains in the blast are knocked down
     for (const s of props) if (s.alive && wrapDelta(s.x, wx) ** 2 + wrapDelta(s.y, wy) ** 2 < r * r) s.alive = false
     for (const f of fountains) if (f.alive && wrapDelta(f.x, wx) ** 2 + wrapDelta(f.y, wy) ** 2 < r * r) f.alive = false
@@ -3395,22 +3406,20 @@ export function createScene(initial) {
     return true
   }
 
-  // The islands and clouds, drawn from the nearest ground to the farthest. Every ground pixel
-  // is a column of stacked layers: its top is drawn where the column ends and its wall where it
-  // starts, and a pixel that is already taken stays taken (nearer things win).
-  function drawWorld() {
-    const _fb = fb
-    const _zb = zbuf
-    if (rowLo === 0 && rowHi === H && colLo === 0 && colHi === W) {
-      _fb.fill(0)
-      _zb.fill(1e9)
-    } else {
-      for (let y = rowLo; y < rowHi; y++) {
-        _fb.fill(0, y * W + colLo, y * W + colHi)
-        _zb.fill(1e9, y * W + colLo, y * W + colHi)
-      }
-    }
-    colY.fill(rowHi)
+  // ── one frame's view of the ground and clouds, shared by drawWorld and the GPU (gpu-world.ts):
+  // the camera, the cloud drift, the shadows and the haze, and the depth of every step of the walk
+  // from near to far. stepV[0] is where the walk starts; steps 1..n are drawn.
+  const stepV = new Float64Array(4001)
+  const WF = {
+    c: 0, s: 0, q: 0, S: 0, tn: 0, Cx: 0, Cy: 0, A: 0, bx: 0, by: 0, rankMax: 0, cloudsOn: false,
+    holeR: 0, holeCx: 0, holeCy: 0, cdx: 0, cdy: 0, csx: 0, csy: 0, tW1: 0, tW2: 0, tF: 0, sx: 0, sy: 0,
+    isc: 0, reach: 0, blooms: false, nShadow: 0, viewDist: 0, fogStart: 0, n: 0,
+    // colours the GPU needs that are not in the material palettes
+    hazeCol: 0, cloudUnder: 0, foamCol: 0, sparkA: 0, sparkB: 0, shutterLit: 0, shutterShade: 0,
+    topLit, topShade, sideLit, sideShade, cloudTop, cloudSide, shadowMask, sjx, sjy, srx, sry, sfx, sfy, sic,
+  }
+  function worldFrame() {
+    const f = WF
     const c = vCos
     const s = vSin
     const q = vQ
@@ -3421,39 +3430,40 @@ export function createScene(initial) {
     const A = cam.alt
     const bx = cam.x - Math.floor(cam.x / N) * N + N * 2
     const by = cam.y - Math.floor(cam.y / N) * N + N * 2
-    const rankMax = Math.round(clamp(p.clouds, 0, 1) * 16)
-    const cloudsOn = rankMax > 0
+    f.c = c
+    f.s = s
+    f.q = q
+    f.S = S
+    f.tn = tn
+    f.Cx = Cx
+    f.Cy = Cy
+    f.A = A
+    f.bx = bx
+    f.by = by
+    f.rankMax = Math.round(clamp(p.clouds, 0, 1) * 16)
+    f.cloudsOn = f.rankMax > 0
     // the isometric view aboard looks down at a shallow angle, so a cloud would sit over the boat:
     // the clouds open a round hole around it, its rim dithered so it reads as thinning cloud
-    const holeR = onFoot && aboard >= 0 && footView === 0 ? BOAT_ISO_HOLE * S : 0
-    const holeCx = Cx
-    const holeCy = Cy - BOAT_ISO_MID * S
-    const holeIn2 = (holeR * 0.6) * (holeR * 0.6)
-    const holeOut2 = holeR * holeR
-    const inHole = (px, y) => {
-      const dx = px - holeCx
-      const dy = (y - holeCy) * 1.15
-      const d2 = dx * dx + dy * dy
-      if (d2 >= holeOut2) return false
-      if (d2 < holeIn2) return true
-      const t = (Math.sqrt(d2) - holeR * 0.6) / (holeR * 0.4)
-      return BAYER4[((y & 3) << 2) | (px & 3)] >= t * 16
-    }
-    const cdx = (time * 7) % NC
-    const cdy = (time * 3) % NC
-    const csx = sunX * CLOUD_ALT - cdx + NC
-    const csy = sunY * CLOUD_ALT - cdy + NC
-    const tW1 = ((time * 6) | 0) & 1023
-    const tW2 = ((time * 4) | 0) & 1023
-    const tF = (time * 36) | 0
+    f.holeR = onFoot && aboard >= 0 && footView === 0 ? BOAT_ISO_HOLE * S : 0
+    f.holeCx = Cx
+    f.holeCy = Cy - BOAT_ISO_MID * S
+    f.cdx = (time * 7) % NC
+    f.cdy = (time * 3) % NC
+    f.csx = sunX * CLOUD_ALT - f.cdx + NC
+    f.csy = sunY * CLOUD_ALT - f.cdy + NC
+    f.tW1 = ((time * 6) | 0) & 1023
+    f.tW2 = ((time * 4) | 0) & 1023
+    f.tF = (time * 36) | 0
     const sx = sunX
     const sy = sunY
-    const isc = 1 / jetSize()
-    const reach = JET_L * 0.75 * jetSize() + 3
+    f.sx = sx
+    f.sy = sy
+    f.isc = 1 / jetSize()
+    f.reach = JET_L * 0.75 * jetSize() + 3
     // flowers only show near the ground: on foot or aboard, or from the plane flying low in the chase
     // and cockpit views; never from the view overhead. Elsewhere a flower cell is plain green.
     const lead = jets[0]
-    const blooms = onFoot || (viewTarget !== 0 && lead.z - groundAt(lead.x, lead.y) < BLOOM_ALT)
+    f.blooms = onFoot || (viewTarget !== 0 && lead.z - groundAt(lead.x, lead.y) < BLOOM_ALT)
     let nShadow = 0
     if (p.shadow && introT > 0.3) {
       for (let j = 0; j < jets.length && j < 3; j++) {
@@ -3471,6 +3481,126 @@ export function createScene(initial) {
         nShadow++
       }
     }
+    f.nShadow = nShadow
+    f.hazeCol = hazeCol
+    f.cloudUnder = cloudUnder
+    f.foamCol = foamCol
+    f.sparkA = sparkA
+    f.sparkB = sparkB
+    f.shutterLit = shutterLit
+    f.shutterShade = shutterShade
+
+    // start where the tallest thing sits on the bottom row; stop when the sea leaves the top
+    // of the frame, or at the view distance once there is a horizon
+    // (a camera down among the hills and clouds starts right in front of itself instead)
+    const below = rowHi - Cy
+    const nearest = q > 0 ? -0.85 / q : -1e9
+    const camHigh = q > 0 ? A + tn / q : 1e9
+    const dn = S * tn + q * below
+    let v = camHigh > ZTOP + 1 && dn > 1e-6 ? Math.max(nearest, (S * (A - ZTOP) - below) / dn - 2) : nearest
+    // from higher up it sees further, and the haze starts further out
+    f.viewDist = VIEW_DIST + 3 * A
+    f.fogStart = FOG_START + 2 * A
+    const above = Cy - rowLo + 2
+    let vEnd = f.viewDist
+    if (S * tn > q * above) vEnd = Math.min(f.viewDist, (S * A + above) / (S * tn - q * above))
+    const rowsK = S * (tn + q * A)
+    let den = 1 + q * v
+    let n = 0
+    stepV[0] = v
+    for (let guard = 0; v < vEnd && guard < 4000; guard++) {
+      // one step deeper: about one screen row of sea, never coarser than a few pixels across
+      let dv = (den * den) / rowsK
+      const cap = (2.5 * den) / S
+      if (dv > cap) dv = cap
+      if (dv < 0.5) dv = 0.5
+      v += dv
+      den = 1 + q * v
+      stepV[++n] = v
+    }
+    f.n = n
+    return f
+  }
+
+  // the ground and clouds: on the GPU when one is attached (setGpu), else drawWorld on the CPU,
+  // which is also the fallback whenever the GPU cannot draw (no WebGL2, or its context was lost)
+  let gpu = null
+  let groundMs = 0
+  let compareNext = false
+  let groundDiff = null
+  const gpuOut = { fb: new Uint32Array(0), zbuf: new Float32Array(0), W: 0, H: 0, colLo: 0, colHi: 0, rowLo: 0, rowHi: 0 }
+  function drawGround() {
+    const t0 = performance.now()
+    let onGpu = false
+    if (gpu) {
+      const f = worldFrame()
+      gpuOut.fb = fb
+      gpuOut.zbuf = zbuf
+      gpuOut.W = W
+      gpuOut.H = H
+      gpuOut.colLo = colLo
+      gpuOut.colHi = colHi
+      gpuOut.rowLo = rowLo
+      gpuOut.rowHi = rowHi
+      onGpu = gpu.draw(f, stepV, GW, gpuOut)
+      if (onGpu && compareNext) {
+        // debugging: draw the same frame on the CPU too and count the pixels that differ
+        compareNext = false
+        const gFb = fb.slice()
+        const gZ = zbuf.slice()
+        const t1 = performance.now()
+        drawWorld()
+        const cpuMs = performance.now() - t1
+        let n = 0
+        let color = 0
+        let depth = 0
+        for (let y = rowLo; y < rowHi; y++) {
+          for (let x = colLo; x < colHi; x++) {
+            const o = y * W + x
+            n++
+            if (gFb[o] !== fb[o]) color++
+            if (gZ[o] !== zbuf[o]) depth++
+          }
+        }
+        groundDiff = { pixels: n, color, depth, gpuMs: t1 - t0, cpuMs }
+        fb.set(gFb)
+        zbuf.set(gZ)
+      }
+    }
+    if (!onGpu) drawWorld()
+    groundMs += (performance.now() - t0 - groundMs) * 0.05
+  }
+
+  // The islands and clouds, drawn from the nearest ground to the farthest. Every ground pixel
+  // is a column of stacked layers: its top is drawn where the column ends and its wall where it
+  // starts, and a pixel that is already taken stays taken (nearer things win).
+  function drawWorld() {
+    const f = worldFrame()
+    const _fb = fb
+    const _zb = zbuf
+    if (rowLo === 0 && rowHi === H && colLo === 0 && colHi === W) {
+      _fb.fill(0)
+      _zb.fill(1e9)
+    } else {
+      for (let y = rowLo; y < rowHi; y++) {
+        _fb.fill(0, y * W + colLo, y * W + colHi)
+        _zb.fill(1e9, y * W + colLo, y * W + colHi)
+      }
+    }
+    colY.fill(rowHi)
+    const { c, s, q, S, tn, Cx, Cy, A, bx, by, rankMax, cloudsOn, holeR, holeCx, holeCy } = f
+    const { cdx, cdy, csx, csy, tW1, tW2, tF, sx, sy, isc, reach, blooms, nShadow, viewDist, fogStart } = f
+    const holeIn2 = (holeR * 0.6) * (holeR * 0.6)
+    const holeOut2 = holeR * holeR
+    const inHole = (px, y) => {
+      const dx = px - holeCx
+      const dy = (y - holeCy) * 1.15
+      const d2 = dx * dx + dy * dy
+      if (d2 >= holeOut2) return false
+      if (d2 < holeIn2) return true
+      const t = (Math.sqrt(d2) - holeR * 0.6) / (holeR * 0.4)
+      return BAYER4[((y & 3) << 2) | (px & 3)] >= t * 16
+    }
     const _h = heightMap
     const _m = matMap
     const _cn = cloudN
@@ -3485,37 +3615,18 @@ export function createScene(initial) {
         (((((col >> 8) & 255) * keep + hzG * fog) >> 8) << 8) |
         (((col & 255) * keep + hzR * fog) >> 8)) >>> 0
 
-    // start where the tallest thing sits on the bottom row; stop when the sea leaves the top
-    // of the frame, or at the view distance once there is a horizon
-    // (a camera down among the hills and clouds starts right in front of itself instead)
-    const below = rowHi - Cy
-    const nearest = q > 0 ? -0.85 / q : -1e9
-    const camHigh = q > 0 ? A + tn / q : 1e9
-    const dn = S * tn + q * below
-    let v = camHigh > ZTOP + 1 && dn > 1e-6 ? Math.max(nearest, (S * (A - ZTOP) - below) / dn - 2) : nearest
-    // from higher up it sees further, and the haze starts further out
-    const viewDist = VIEW_DIST + 3 * A
-    const fogStart = FOG_START + 2 * A
-    const above = Cy - rowLo + 2
-    let vEnd = viewDist
-    if (S * tn > q * above) vEnd = Math.min(viewDist, (S * A + above) / (S * tn - q * above))
+    let v = stepV[0]
     let den = 1 + q * v
     let m = S / den
     let R = Cy - m * (tn * v - A) + EPS
     for (let z = 0; z <= ZTOP; z++) rowNow[z] = Math.floor(R - m * z)
-    const rowsK = S * (tn + q * A)
     // columns not yet drawn up to the top of the frame; when none are left, nothing more can show
     let live = colHi - colLo
-    for (let guard = 0; v < vEnd && live > 0 && guard < 4000; guard++) {
-      // one step deeper: about one screen row of sea, never coarser than a few pixels across
-      let dv = (den * den) / rowsK
-      const cap = (2.5 * den) / S
-      if (dv > cap) dv = cap
-      if (dv < 0.5) dv = 0.5
+    for (let k = 1; k <= f.n && live > 0; k++) {
       // the front faces drawn at this step stand at the previous depth (for the heights up a facade)
       const Rp = R
       const mp = m
-      v += dv
+      v = stepV[k]
       den = 1 + q * v
       m = S / den
       R = Cy - m * (tn * v - A) + EPS
@@ -5263,7 +5374,7 @@ export function createScene(initial) {
       rowLo = 0
       rowHi = H
     }
-    drawWorld()
+    drawGround()
     drawSky()
     drawTrails()
     drawSmoke()
@@ -5310,6 +5421,17 @@ export function createScene(initial) {
   return {
     setParams,
     resize,
+    /** draw the ground and clouds with this GPU drawer (gpu-world.ts), or null for the CPU */
+    setGpu(g) {
+      gpu = g
+    },
+    /** debugging: the next frame draws the ground both ways; groundDiff then has the count */
+    compareGround() {
+      compareNext = true
+    },
+    get groundDiff() { return groundDiff },
+    /** where the ground is drawn and its average time per frame, in ms */
+    get groundStats() { return { on: gpu && gpu.ok ? 'gpu' : 'cpu', ms: Math.round(groundMs * 100) / 100, steps: WF.n, gpu: gpu?.timing } },
     pointerMove,
     pointerLeave,
     press,

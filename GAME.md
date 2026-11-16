@@ -2,7 +2,7 @@
 
 Notes for picking this project up later. The flight, the islands, and the pixel look started as a remix of https://remix.ui8.ai/fly (Forge share, remix enabled), which flew a fighter jet. Here it became Enzo's day: a 1920s biplane (yellow wings, blue fuselage, radial engine) over Lake Como–style islands, with houses, bombs, a person, boats, docks, sea life, and wind added. The code still calls the plane "the jet" (`jets`, `drawJet`, `jet-model.ts`). The React component is `EnzoScene`.
 
-There is no 3D engine and no polygon mesh. One software renderer paints a low-resolution buffer. The page scales that buffer with `image-rendering: pixelated`.
+There is no 3D engine and no polygon mesh. One software renderer paints a low-resolution buffer. The page scales that buffer with `image-rendering: pixelated`. The ground and clouds can be drawn on the graphics card instead (WebGL2, `gpu-world.ts`), pixel for pixel the same; everything else is drawn on the CPU.
 
 ## Run
 
@@ -25,6 +25,7 @@ React StrictMode runs the canvas effect twice. `EnzoScene` must call `scene.resi
 | `src/lib/scene.ts` | World, simulation, sprite-stack renderer, villas, yachts, fish and whales, person, bombs. |
 | `src/lib/jet-model.ts` | The biplane, built in code by `decodeJet()` as 14 slices of 44 across × 34 along. Palette families: body (blue), accent (yellow wings), metal, and fixed colours. |
 | `src/lib/cockpit.ts` | The open biplane cockpit, painted once as three depth layers, then shifted each frame with the pilot’s head. Gauges, propeller and stick are drawn live. |
+| `src/lib/gpu-world.ts` | The ground and clouds on the graphics card (WebGL2), read back into the scene's buffers. See "Ground on the GPU". |
 | `src/lib/flame-layer.ts` | WebGL canvas over the pixels for jet afterburners. The biplane has no flames, so it now draws nothing. |
 | `src/lib/log.ts` | `Log` ring buffer. The page exposes it as `gameLog`. |
 
@@ -35,7 +36,7 @@ React StrictMode runs the canvas effect twice. `EnzoScene` must call `scene.resi
 `step(dt)` moves the world. `render()` draws it. Order inside `render`:
 
 1. `updateView` — camera pose.
-2. `drawWorld` — ground columns and clouds, near pixels win.
+2. `drawGround` — ground columns and clouds, near pixels win: on the GPU when one is attached, else `drawWorld`.
 3. `drawSky` — skipped in a flat overhead view.
 4. Trails, smoke, bombs, fish and whales, boats, the walking figure, jets far to near, blast sparks.
 5. If the view is rolled (cockpit, or a barrel roll), all of that was drawn on a square sheet and is then rotated into the frame. The cockpit layers go on last.
@@ -45,7 +46,30 @@ The ground is a height map. Each cell is a stack of pixels: the side color fills
 
 Depth is a z-buffer of “how far along the view axis,” not a GPU buffer. A pixel that is already nearer is left alone.
 
-Everything is drawn on the CPU, so `drawWorld` is most of the frame (60–75%). It saves work without changing a pixel: a column drawn up to the top of the frame is skipped, the depth loop stops once every column is (`live`), and the cloud map is not read where every cloud row at that depth (`cTop` to `cBot`) is already drawn. A column is always filled solid from its `colY` down, which is what makes these skips safe.
+On the CPU, `drawWorld` is most of the frame (60–75%). It saves work without changing a pixel: a column drawn up to the top of the frame is skipped, the depth loop stops once every column is (`live`), and the cloud map is not read where every cloud row at that depth (`cTop` to `cBot`) is already drawn. A column is always filled solid from its `colY` down, which is what makes these skips safe.
+
+`worldFrame()` works out what the ground needs for this frame (camera, palettes, plane shadows, water timing, and every depth step in `stepV`). `drawWorld` and the GPU both read it, so they draw from the same numbers.
+
+### Ground on the GPU
+
+`EnzoScene` makes a `createGpuWorld()` and hands it to `scene.setGpu`. Without WebGL2, or when the context is lost, `draw` returns false and the frame falls back to `drawWorld`. Add `?cpu` to the address to force the CPU.
+
+Each pixel walks the same depth steps as `drawWorld`, on its own. For one pixel, "the column at step k covers row y" is a height test against a straight line in depth, and the map cell it samples is a straight line too, so a step is a few multiplies and a texture read. The walk skips:
+
+- Steps above everything: a binary search finds where the line comes below the tallest column (and the clouds).
+- Whole 16 × 16 blocks of the map the line passes over (`hBlock`, the tallest column of each), and blocks of the cloud map with no cloud that can show (`cBlock`). A table from depth to step (`stepAt`) finds the step past the block.
+- The ground before its band can reach it. Two small passes walk the lowest row of every 64-row band, then of every 8-row band, and store the first step where the ground meets it. A row higher on the screen needs taller columns at every depth, so it meets the ground no nearer. Each pixel then looks only for clouds before that step (clouds float, so they do not follow this rule) and walks the ground from there.
+
+Colours and depths are read back into `fb` and `zbuf` (depth as the float's four bytes, so it is exact). Sky, boats, the person, the plane and the cockpit then draw over them on the CPU as before.
+
+The world goes up as textures once per `buildWorld` (`GW.stamp`). Bombs and wrecked houses lower the ground in place: they push the changed rows onto `GW.dirty`, and only those rows are sent again.
+
+On the development laptop (Intel UHD, 640 × 360), the ground takes about the same time on either side, 7–12 ms. The GPU path frees the CPU, though: in play, about 0.5 cores against 1.3. The read back alone costs about 3 ms.
+
+In development the page exposes the scene as `window.enzoScene`:
+
+- `enzoScene.groundStats`: where the ground is drawn, its average ms, the step count, and the GPU's own times (`setup`, `shade`, `read`).
+- `enzoScene.compareGround()`: the next frame is drawn both ways. `enzoScene.groundDiff` then counts the pixels whose colour or depth differ. Expect 0 to 3 (float rounding).
 
 Projection, used everywhere (`project` and the jet slices):
 
@@ -398,6 +422,8 @@ The world line lists islands, specks, docks, boats, fish, whales, gardens, viewp
 - The boat first-person camera and the walking first-person camera are different lenses. The walking one is long (the eye 26 behind the camera point), so anything of your own boat near the eye would sit in the middle of the picture as a cut-open hull. Keep the boat on its wide lens.
 - Trees are found with `isTree` / `isTrunk`, not by material range. Checking only 9–11 misses firs and round-crowned trees.
 - `drawWorld` must capture `Rp` and `mp` before it advances the depth step, or the shutter bands slide up and down the walls as the camera moves.
+- Any change to how `drawWorld` colours a pixel has to be made in the shader in `gpu-world.ts` too. Check with `compareGround()` in every view.
+- Anything that changes `heightMap` or `matMap` after `buildWorld` must push the changed rows onto `GW.dirty` (or bump `GW.stamp`), or the GPU keeps drawing the old ground. The tallest column (`uHMax`) is only measured on a full upload, so changes may lower the ground but not raise it above that.
 - Garden materials are 43 and up, and `stampHouse` rejects any of them under a new yard. Gravel walks are 4–5 like the yard and the sand, so they are protected by `parkMap`, not by material. Keep every new layout marking `parkMap` and checking it.
 - Prop and bird colours are boat materials. Append them to `YACHT_COL` and give each a `YM_` constant; `yachtPal` follows `NYM`.
 - Anything new placed in `buildWorld` that draws random numbers should get its own `mulberry32` stream, as `placeBirds` does. Drawing from the shared one shifts everything after it, clouds included.
