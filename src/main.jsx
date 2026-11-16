@@ -1,13 +1,13 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import FighterJetScene from './FighterJetScene.jsx'
+import EnzoScene from './EnzoScene.jsx'
 import './index.css'
 
 // Remixed from https://remix.ui8.ai/fly while "Anyone can view and remix" was on.
 // Saved control values from that share, so the first flight matches the demo.
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <FighterJetScene
+    <EnzoScene
       showHint
       touchControls="auto"
       speed={74}

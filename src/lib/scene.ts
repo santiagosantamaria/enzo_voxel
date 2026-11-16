@@ -1,4 +1,4 @@
-// Enzo: a sprite-stack biplane scene, drawn by a small software renderer.
+// Enzo's day: a sprite-stack biplane scene, drawn by a small software renderer.
 //
 // Everything is drawn into one low-resolution pixel buffer, the way the technique works:
 //   · the plane is a stack of horizontal slices drawn 1 px apart, turned to any angle
@@ -249,6 +249,8 @@ function normalise(field) {
 //        22 roof sunny side · 23 rubble · 24 scorch · 25 dock · 26 dock dark · 27 stucco wall, pale yellow
 //        28–31 the same four walls with a column of shuttered windows · 32 tower · 33 tower cap · 34 cypress
 //        35 balustrade · 36 topiary · 37–39 fir: top, body, edge · 40–42 round-crowned tree: top, body, edge
+//        villa gardens: 43 box hedge · 44 stone (fountain rim) · 45 fountain water · 46 plinth and spout
+//        47–49 flowers: pink, yellow, white · 50 clipped lawn · 51–52 paving, light and dark
 const MAT_TOP = [
   [36, 104, 180], [44, 124, 198], [66, 160, 216], [104, 204, 214],
   [238, 220, 164], [222, 200, 140],
@@ -265,6 +267,9 @@ const MAT_TOP = [
   [238, 236, 228], [212, 208, 200], [44, 92, 54], [238, 234, 224], [112, 178, 74],
   [72, 146, 98], [44, 116, 78], [30, 90, 62],
   [76, 162, 62], [46, 128, 52], [30, 98, 46],
+  [52, 118, 58], [178, 174, 166], [118, 186, 214], [206, 204, 198],
+  [236, 76, 146], [248, 212, 58], [246, 244, 238], [118, 186, 74],
+  [206, 198, 182], [188, 180, 164],
 ]
 const MAT_SIDE = [
   [36, 104, 180], [44, 124, 198], [66, 160, 216], [104, 204, 214],
@@ -282,6 +287,9 @@ const MAT_SIDE = [
   [232, 228, 218], [180, 176, 168], [30, 72, 42], [214, 208, 196], [72, 136, 52],
   [32, 88, 62], [28, 78, 56], [22, 66, 48],
   [26, 82, 42], [24, 76, 40], [21, 68, 38],
+  [34, 84, 44], [138, 134, 128], [88, 146, 170], [160, 158, 152],
+  [70, 128, 56], [70, 128, 56], [70, 128, 56], [78, 140, 52],
+  [150, 142, 130], [150, 142, 130],
 ]
 const NMAT = MAT_TOP.length
 const WALLS = [17, 18, 19, 27] // stucco colours; the windowed wall of each is WINDOWED[i]
@@ -291,13 +299,33 @@ const isBuilt = (m) => (m >= 17 && m <= 22) || (m >= 27 && m <= 33)
 /** a wall with shuttered windows: the drawn facade has a band of shutters on every floor */
 const WINDOW_MAT = new Uint8Array(64)
 for (const m of WINDOWED) WINDOW_MAT[m] = 1
-const FLOOR_H = 2.5
+const FLOOR_H = 3
 /** trees, three kinds: [middle, body, edge] materials. The middle cell is the trunk under the leaves. */
 const TREE_KINDS = [[9, 10, 11], [37, 38, 39], [40, 41, 42]] // leafy, fir, round crown
 const TREE = new Uint8Array(64) // 1 leaves, 2 trunk
 for (const k of TREE_KINDS) { TREE[k[0]] = 2; TREE[k[1]] = 1; TREE[k[2]] = 1 }
 const isTree = (m) => TREE[m] !== 0
 const isTrunk = (m) => TREE[m] === 2
+/** villa garden materials */
+const M_HEDGE = 43
+const M_STONE = 44
+const M_POOL = 45
+const M_PLINTH = 46
+const M_FLOWERS = [47, 48, 49] // pink, yellow, white
+/** flowers drawn as a small bloom in the middle of the cell, not the whole cell: yellow and white */
+const BLOOM = new Uint8Array(64)
+BLOOM[48] = 1
+BLOOM[49] = 1
+/** the plane shows flowers only below this height above the ground, in the chase and cockpit views */
+const BLOOM_ALT = 16
+const M_LAWN = 50
+const M_PAVE = [51, 52] // lakeside terraces and promenades
+/** green things a blast scorches: grass, trees, cypresses, topiary, hedges, flowers, lawn */
+const GREEN = new Uint8Array(64)
+for (const m of [6, 7, 8, 34, 36, M_HEDGE, 47, 48, 49, M_LAWN]) GREEN[m] = 1
+const isGreen = (m) => GREEN[m] === 1 || isTree(m)
+/** a flower: yellow or white, half and half (the pink material is no longer used) */
+const flowerAt = (r) => M_FLOWERS[r < 0.5 ? 1 : 2]
 
 
 
@@ -371,6 +399,10 @@ const YACHT_COL = [
   // the man: skin, shirt, shirt stripe, trousers, shoes and belt, hair, straw hat, hat band
   [226, 172, 132], [240, 238, 230], [38, 58, 112], [46, 54, 80], [104, 66, 40], [164, 116, 70],
   [232, 200, 120], [44, 40, 52],
+  // garden statues (grey marble), fountain spray, benches (dark brown slats, dark iron), yellow flowers and leaves in the urns
+  [196, 194, 188], [224, 240, 250], [88, 56, 34], [44, 46, 52], [248, 208, 60], [62, 122, 56],
+  // birds: gull white, gull wing grey, black wing tips, yellow bill; swallow back, belly, throat
+  [244, 244, 240], [168, 176, 186], [36, 36, 42], [238, 188, 60], [34, 44, 86], [236, 228, 208], [180, 80, 50],
 ]
 const YM_FLUKE = 21
 const YM_WHALE = 23
@@ -382,6 +414,19 @@ const YM_SHOE = 28
 const YM_HAIR = 29
 const YM_STRAW = 30
 const YM_BAND = 31
+const YM_MARBLE = 32
+const YM_SPRAY = 33
+const YM_WOOD = 34
+const YM_IRON = 35
+const YM_BLOOM = 36
+const YM_LEAF = 37
+const YM_GULL = 38
+const YM_GULL_WING = 39
+const YM_WING_TIP = 40
+const YM_BILL = 41
+const YM_SWALLOW = 42
+const YM_BELLY = 43
+const YM_THROAT = 44
 const NYM = YACHT_COL.length
 // fish and whales
 // 0 whale back · 1 flank · 2 lit · 3 scars · 4 flippers · 5 dark (rim, blowholes) · 6 spray
@@ -607,6 +652,107 @@ const PERSON = (() => {
   }
 })()
 
+// Garden props, drawn like the boats: surface voxels of PROP_G with normals. Kinds:
+// 0, 1 marble statues in a long robe, 3 to 3.4 tall, so on a plinth one high the head stays under a
+//      villa's eaves: an orator with the right arm raised, and a figure holding a staff
+// 2    a park bench, dark brown slats on a dark iron frame, 2.8 long; the sitter faces forward
+// 3    a marble urn of yellow flowers, for the top of a post
+const PROP_G = 0.2
+const P_BENCH = 2
+const P_URN = 3
+function propModel(build, g = PROP_G) {
+  const A = [], F = [], Z = [], NA = [], NF = [], NZ = [], K = [], P = []
+  // a box, surface voxels only; col is a material, or col(i, j, k) picks one (i across, j forward, k up).
+  // part tags the voxels (a bird's wings). A box one voxel thick is a plate, and faces up.
+  const box = (a0, a1, f0, f1, z0, z1, col, part = 0) => {
+    const na = Math.max(1, Math.round((a1 - a0) / g))
+    const nf = Math.max(1, Math.round((f1 - f0) / g))
+    const nz = Math.max(1, Math.round((z1 - z0) / g))
+    const side = (i, n) => (n === 1 ? 0 : i === 0 ? -1 : i === n - 1 ? 1 : 0)
+    for (let i = 0; i < na; i++) {
+      for (let j = 0; j < nf; j++) {
+        for (let k = 0; k < nz; k++) {
+          const sa = side(i, na)
+          const sf = side(j, nf)
+          const sz = nz === 1 ? 1 : side(k, nz)
+          if (sa === 0 && sf === 0 && sz === 0 && na > 1 && nf > 1 && nz > 1) continue
+          const l = Math.hypot(sa, sf, sz) || 1
+          A.push(a0 + (i + 0.5) * g); F.push(f0 + (j + 0.5) * g); Z.push(z0 + (k + 0.5) * g)
+          NA.push(sa / l); NF.push(sf / l); NZ.push(sz / l)
+          K.push(typeof col === 'function' ? col(i, j, k) : col)
+          P.push(part)
+        }
+      }
+    }
+  }
+  build(box)
+  return {
+    n: A.length,
+    A: Float32Array.from(A), F: Float32Array.from(F), Z: Float32Array.from(Z),
+    NA: Float32Array.from(NA), NF: Float32Array.from(NF), NZ: Float32Array.from(NZ),
+    K: Uint8Array.from(K), P: Uint8Array.from(P),
+  }
+}
+const statueModel = (pose) => propModel((box) => {
+  const m = YM_MARBLE
+  box(-0.5, 0.5, -0.4, 0.4, 0, 0.4, m) // the hem of the robe
+  box(-0.4, 0.4, -0.2, 0.4, 0.4, 1.6, m) // the robe, falling in front
+  box(-0.4, 0.4, -0.2, 0.2, 1.6, 2.6, m) // chest and shoulders
+  box(-0.2, 0.2, -0.2, 0.2, 2.6, 3.0, m) // the head
+  box(-0.6, -0.4, -0.1, 0.1, 1.4, 2.6, m) // the left arm, hanging
+  if (pose === 0) box(0.4, 0.6, 0, 0.2, 2.2, 3.4, m) // the right arm, raised
+  else {
+    box(0.4, 0.6, -0.1, 0.1, 1.6, 2.6, m) // the right arm
+    box(0.6, 0.8, 0.0, 0.2, 0, 3.4, m) // the staff
+  }
+})
+const PROPS = [
+  statueModel(0),
+  statueModel(1),
+  propModel((box) => {
+    box(-1.2, 1.2, -0.4, 0.4, 1.0, 1.2, YM_WOOD) // the seat
+    box(-1.2, 1.2, -0.6, -0.4, 1.2, 2.2, YM_WOOD) // the back
+    for (const a0 of [-1.4, 1.2]) {
+      box(a0, a0 + 0.2, -0.6, 0.4, 0, 1.0, YM_IRON) // the end frame
+      box(a0, a0 + 0.2, 0.2, 0.4, 1.0, 1.4, YM_IRON) // the arm's upright
+      box(a0, a0 + 0.2, -0.6, 0.4, 1.4, 1.6, YM_IRON) // the arm
+    }
+  }),
+  propModel((box) => {
+    box(-0.2, 0.2, -0.2, 0.2, 0, 0.2, YM_MARBLE) // the foot
+    box(-0.4, 0.4, -0.4, 0.4, 0.2, 0.8, YM_MARBLE) // the bowl
+    box(-0.6, 0.6, -0.6, 0.6, 0.8, 1.0, YM_MARBLE) // the lip
+    box(-0.4, 0.4, -0.4, 0.4, 1.0, 1.4, (i, j, k) => ((i * 3 + j * 5 + k * 7) % 3 === 0 ? YM_LEAF : YM_BLOOM))
+  }),
+]
+
+// Birds, built like the props, with parts: 0 the body, 1 the left wing, 2 the right wing. The wings
+// beat about the shoulder (BIRD_SHOULDER across, at the wing's own height).
+// 0 gull: white, grey wings with black tips, a yellow bill, 4.5 across. Voxels of 0.25.
+// 1 swallow: dark blue back, cream belly, rusty throat, a forked tail, 3.2 across. Voxels of 0.2.
+const BIRD_G = [0.25, 0.2]
+const BIRD_SHOULDER = [0.25, 0.2]
+const BIRDS = [
+  propModel((box) => {
+    box(-0.25, 0.25, -1.0, 0.75, -0.25, 0.25, YM_GULL) // the body
+    box(-0.25, 0.25, 0.75, 1.25, 0, 0.5, YM_GULL) // the head
+    box(-0.125, 0.125, 1.25, 1.5, 0.125, 0.375, YM_BILL)
+    box(-0.25, 0.25, -1.5, -1.0, -0.125, 0.125, YM_GULL) // the tail
+    box(-2.25, -0.25, -0.5, 0.25, 0, 0.25, (i) => (i < 2 ? YM_WING_TIP : YM_GULL_WING), 1)
+    box(0.25, 2.25, -0.5, 0.25, 0, 0.25, (i) => (i > 5 ? YM_WING_TIP : YM_GULL_WING), 2)
+  }, BIRD_G[0]),
+  propModel((box) => {
+    box(-0.2, 0.2, -0.5, 0.5, -0.2, 0.2, (i, j, k) => (k === 0 ? YM_BELLY : YM_SWALLOW)) // the body
+    box(-0.2, 0.2, 0.5, 0.7, -0.2, 0.2, (i, j, k) => (k === 0 ? YM_THROAT : YM_SWALLOW)) // the head
+    box(-0.4, -0.2, -1.3, -0.5, 0, 0.2, YM_SWALLOW) // the forked tail
+    box(0.2, 0.4, -1.3, -0.5, 0, 0.2, YM_SWALLOW)
+    box(-1.6, -0.2, -0.2, 0.2, 0, 0.2, YM_SWALLOW, 1) // the wings, swept back at the tips
+    box(-1.6, -1.0, -0.6, -0.2, 0, 0.2, YM_SWALLOW, 1)
+    box(0.2, 1.6, -0.2, 0.2, 0, 0.2, YM_SWALLOW, 2)
+    box(1.0, 1.6, -0.6, -0.2, 0, 0.2, YM_SWALLOW, 2)
+  }, BIRD_G[1]),
+]
+
 function makeJet(x, y, z, yaw) {
   return {
     x, y, z, yaw, yawRate: 0, roll: 0, pitch: 0, stunt: -1, stuntDir: 1, stuntDelay: 0, vx: 0, vy: 0,
@@ -814,6 +960,17 @@ export function createScene(initial) {
   let spawnX = N / 2
   let spawnY = N / 2
   const houses = []
+  const props = [] // { kind, x, y, z, yaw, alive }: kind indexes PROPS; z is what it stands on
+  const fountains = [] // { x, y, z, alive }: z is the top of the spout
+  // birds fly set paths about an anchor (ax, ay) at height az, worked out from the time each frame:
+  // a gull circles at radius r with angular speed w; a swallow loops on a Lissajous figure
+  // (rx, ry, w1, w2). ph and ph2 are phases.
+  const birds = []
+  // what a cell is part of, so one layout never runs over another:
+  // 1 a house and its yard · 2 a villa garden · 3 a lakeside terrace, promenade or path
+  const parkMap = new Uint8Array(N * N)
+  let gardenN = 0
+  let flowerN = 0
 
   function buildWorld() {
     const rnd = mulberry32((p.seed | 0) * 7919 + 13)
@@ -947,8 +1104,11 @@ export function createScene(initial) {
 
     placeHouses(rnd)
     placeDocks()
+    placeViewpoints(rnd)
+    placeWildflowers(rnd)
     placeBoats(rnd)
     placeLife(rnd)
+    placeBirds(mulberry32((p.seed | 0) * 4513 + 29)) // its own random stream, so the clouds stay put
     worldLog.info('built', {
       islands: bigIsle.length,
       specks: speckN,
@@ -956,6 +1116,12 @@ export function createScene(initial) {
       boats: boats.length,
       fish: fish.length,
       whales: whales.length,
+      birds: birds.length,
+      houses: houses.length,
+      gardens: gardenN,
+      viewpoints: views.length,
+      props: props.length,
+      flowers: flowerN,
       spawn: [spawnX | 0, spawnY | 0],
     })
 
@@ -999,8 +1165,8 @@ export function createScene(initial) {
   // at one corner, and stands in a garden of cypresses and clipped topiary behind a stone balustrade.
   function stampHouse(cx, cy, rot, rnd) {
     const villa = rnd() < 0.4
-    const w0 = villa ? 9 + ((rnd() * 3) | 0) : 6 + ((rnd() * 3) | 0)
-    const d0 = villa ? 10 + ((rnd() * 4) | 0) : 7 + ((rnd() * 3) | 0)
+    const w0 = villa ? 11 + ((rnd() * 3) | 0) : 7 + ((rnd() * 3) | 0)
+    const d0 = villa ? 12 + ((rnd() * 4) | 0) : 8 + ((rnd() * 3) | 0)
     const ww = rot ? d0 : w0
     const dd = rot ? w0 : d0
     const yard = villa ? 3 : 2
@@ -1010,8 +1176,8 @@ export function createScene(initial) {
       for (let dx = -yard; dx < ww + yard; dx++) {
         const o = ((((cy + dy) & NM) << NSHIFT) | ((cx + dx) & NM))
         const m = matMap[o]
-        if (m < 4) return false
-        if (houseMap[o]) return false
+        if (m < 4 || m >= M_HEDGE) return false // water, or another villa's garden
+        if (houseMap[o] || parkMap[o]) return false
         if (dx >= 0 && dy >= 0 && dx < ww && dy < dd) {
           if ((m < 6 || m > 8) && !isTree(m)) return false
           const h = isTree(m) ? 0 : heightMap[o]
@@ -1082,7 +1248,7 @@ export function createScene(initial) {
     if (villa && rnd() < 0.45) {
       const tx = rnd() < 0.5 ? 0 : ww - 3
       const ty = rnd() < 0.5 ? 0 : dd - 3
-      const tTop = top + 4
+      const tTop = top + 5
       for (let k = 0; k < 9; k++) {
         const ix = k % 3
         const iy = (k / 3) | 0
@@ -1092,6 +1258,9 @@ export function createScene(initial) {
         heightMap[o] = tTop + (centre ? 2 : side ? 1 : 0)
         matMap[o] = side ? 33 : 32
       }
+    }
+    for (let dy = -yard; dy < dd + yard; dy++) {
+      for (let dx = -yard; dx < ww + yard; dx++) parkMap[(((cy + dy) & NM) << NSHIFT) | ((cx + dx) & NM)] = 1
     }
     // cypresses standing tall in the garden, and a few round clipped bushes
     if (garden.length) {
@@ -1117,19 +1286,244 @@ export function createScene(initial) {
           heightMap[no] = minH + (k === 0 ? 3 : 2)
         }
       }
+      // flowers along the garden ring, here and there
+      for (const o of garden) {
+        if (matMap[o] < 6 || matMap[o] > 8) continue
+        if (hash8(o * 7 + 3) > 37) continue
+        matMap[o] = flowerAt(rnd())
+        heightMap[o] = minH + 1
+      }
+      if (stampGarden(cx, cy, ww, dd, yard, minH, rnd)) gardenN++
     }
     houses.push({ x: cx, y: cy, w: ww, d: dd, base: minH, alive: true })
     return true
   }
 
+  // A villa's formal garden, out past the balustrade on one side of the house, after the Italian villa
+  // gardens. It is open: no hedge runs round it, the balustrade opens onto it with an urn on a post at
+  // each end, and the walk from the gate runs down its middle. Three layouts:
+  // 0 parterre: four box-edged beds of flowers round a round fountain, topiary cones at their outer
+  //   corners, benches at the ends of the cross walk, a statue closing the axis
+  // 1 canal: a long stone-rimmed pool on the axis with a fountain at the far end and urns at its
+  //   corners, gravel walks either side with benches, flower borders, an allée of cypresses, a statue
+  // 2 knot garden: four square beds of clipped box drawn in an X or a cross with flowers between,
+  //   a statue in the middle where the walks cross, benches at the ends of the cross walk
+  // It goes on the first side, in random order, where the ground is open grass or trees, free of other
+  // houses and gardens and within a terrace or so of the house's floor; the ground is levelled to it.
+  const G_LAWN = 0, G_WALK = 1, G_HEDGE = 2, G_RIM = 3, G_WATER = 4, G_SPOUT = 5, G_STATUE = 6
+  const G_FLOWER = 7, G_CONE = 8, G_CYPRESS = 9, G_URN = 10
+  const GARDEN_DEPTHS = [[13, 11], [12, 10, 8], [13, 11]]
+  // Lays out a garden hw either side of the axis (a = −hw..hw) and D deep (v = 0 at the balustrade).
+  // set(a, v, code) paints a cell; prop(a, v, kind, da, dv) stands a prop on one, facing along (da, dv).
+  function planGarden(pat, hw, D, set, prop, rnd) {
+    const fill = (c) => { for (let v = 0; v < D; v++) for (let a = -hw; a <= hw; a++) set(a, v, c) }
+    const statue = () => (rnd() < 0.5 ? 0 : 1)
+    if (pat === 0) {
+      const n = (D - 5) >> 1 // rows in a bed: a walk, n rows of beds, the cross walk, n rows, a walk
+      const vC = n + 2
+      fill(G_WALK)
+      for (const sv of [-1, 1]) {
+        for (const sa of [-1, 1]) {
+          const a1 = hw - 1
+          const v0 = sv < 0 ? 1 : vC + 2
+          const v1 = v0 + n - 1
+          for (let v = v0; v <= v1; v++) {
+            for (let a = 2; a <= a1; a++) set(sa * a, v, v === v0 || v === v1 || a === 2 || a === a1 ? G_HEDGE : G_FLOWER)
+          }
+          set(sa * a1, sv < 0 ? v0 : v1, G_CONE)
+        }
+      }
+      // the fountain on the crossing: water in a stone rim, gravel round it cutting the beds' corners
+      for (let v = 0; v < D; v++) {
+        for (let a = -hw; a <= hw; a++) {
+          const d = Math.hypot(a, v - vC)
+          if (d < 0.5) set(a, v, G_SPOUT)
+          else if (d < 1.5) set(a, v, G_WATER)
+          else if (d < 2.5) set(a, v, G_RIM)
+          else if (d < 3.2) set(a, v, G_WALK)
+        }
+      }
+      set(-2, 0, G_CONE)
+      set(2, 0, G_CONE)
+      prop(0, D - 1, statue(), 0, -1)
+      prop(-hw, vC, P_BENCH, 1, 0)
+      prop(hw, vC, P_BENCH, -1, 0)
+    } else if (pat === 1) {
+      for (let v = 0; v < D; v++) {
+        for (let a = -hw; a <= hw; a++) {
+          const x = Math.abs(a)
+          let c = G_LAWN
+          if ((v <= 1 || v === D - 1) && x <= 4) c = G_WALK // the forecourt, and the walk across the end
+          else if (x <= 2 && v <= D - 2) c = x === 2 || v === 2 || v === D - 2 ? G_RIM : G_WATER
+          else if (x === 3 || x === 4) c = G_WALK
+          else if (x === 5 && v >= 1 && v <= D - 2) c = G_FLOWER
+          else if (x === 6 && v % 3 === 1 && v <= D - 2) c = G_CYPRESS
+          set(a, v, c)
+        }
+      }
+      set(0, D - 4, G_SPOUT)
+      for (const v of [2, D - 2]) for (const a of [-2, 2]) prop(a, v, P_URN, 0, 1)
+      prop(0, D - 1, statue(), 0, -1)
+      for (const v of D >= 10 ? [Math.round(D / 3), Math.round((2 * D) / 3)] : [D >> 1]) {
+        prop(-4, v, P_BENCH, 1, 0)
+        prop(4, v, P_BENCH, -1, 0)
+      }
+    } else {
+      const S = (D - 3) >> 1 // the beds' side: S rows of beds, the cross walk, S rows
+      const vC = S + 1
+      fill(G_WALK)
+      for (let v = 0; v < D; v++) {
+        for (let a = -hw; a <= hw; a++) {
+          if (Math.abs(a) > S + 2) set(a, v, (hash8(v * 31 + a * 7 + 5) & 7) === 0 ? G_FLOWER : G_LAWN)
+        }
+      }
+      for (const sv of [-1, 1]) {
+        for (const sa of [-1, 1]) {
+          const v0 = sv < 0 ? 0 : vC + 2
+          const cross = sv !== sa // an X in two opposite beds, a cross in the other two
+          for (let i = 0; i < S; i++) {
+            for (let j = 0; j < S; j++) {
+              const edge = i === 0 || j === 0 || i === S - 1 || j === S - 1
+              let c = edge ? G_HEDGE : G_FLOWER
+              if (!edge && S >= 5 && (cross ? i === 2 || j === 2 : Math.abs(i - 2) === Math.abs(j - 2))) c = G_HEDGE
+              set(sa * (2 + i), v0 + j, c)
+            }
+          }
+          set(sa * (S + 1), sv < 0 ? 0 : D - 1, G_CONE)
+        }
+      }
+      for (const [a, v] of [[-1, vC - 1], [1, vC - 1], [-1, vC + 1], [1, vC + 1]]) set(a, v, G_FLOWER)
+      prop(0, vC, statue(), 0, -1)
+      prop(-(S + 2), vC, P_BENCH, 1, 0)
+      prop(S + 2, vC, P_BENCH, -1, 0)
+    }
+  }
+
+  function stampGarden(cx, cy, ww, dd, yard, base, rnd) {
+    const sides = [0, 1, 2, 3]
+    for (let i = 3; i > 0; i--) {
+      const j = (rnd() * (i + 1)) | 0
+      const t = sides[i]
+      sides[i] = sides[j]
+      sides[j] = t
+    }
+    const first = (rnd() * 3) | 0
+    for (let k = 0; k < 3; k++) {
+      const pat = (first + k) % 3
+      for (const side of sides) {
+        // u runs along the side (0 at the house's corner), v outward from the balustrade (−1)
+        const L = side < 2 ? ww : dd
+        const uA = L >> 1 // the gate's axis
+        const hw = uA + yard - ((L & 1) ? 0 : 1) // so the garden is symmetric about the axis
+        const cellU = (u, v) => {
+          let dx = u
+          let dy = u
+          if (side === 0) dy = -yard - 1 - v
+          else if (side === 1) dy = dd + yard + v
+          else if (side === 2) dx = -yard - 1 - v
+          else dx = ww + yard + v
+          return (((cy + dy) & NM) << NSHIFT) | ((cx + dx) & NM)
+        }
+        const cell = (a, v) => cellU(uA + a, v)
+        for (const D of GARDEN_DEPTHS[pat]) {
+          let ok = true
+          for (let v = 0; v < D && ok; v++) {
+            for (let a = -hw; a <= hw; a++) {
+              const o = cell(a, v)
+              const m = matMap[o]
+              if (houseMap[o] || parkMap[o] || !((m >= 6 && m <= 8) || isTree(m)) || Math.abs(floorMap[o] - base) > 4) {
+                ok = false
+                break
+              }
+            }
+          }
+          if (!ok) continue
+          const nA = 2 * hw + 1
+          const plan = new Uint8Array(nA * D)
+          const marks = []
+          const set = (a, v, c) => {
+            if (a >= -hw && a <= hw && v >= 0 && v < D) plan[v * nA + a + hw] = c
+          }
+          const prop = (a, v, kind, da, dv) => {
+            marks.push([a, v, kind, da, dv])
+            if (kind === P_URN) set(a, v, G_URN)
+            else if (kind !== P_BENCH) set(a, v, G_STATUE)
+          }
+          planGarden(pat, hw, D, set, prop, rnd)
+          // the garden's axes in the world, for the props' headings
+          const uX = side < 2 ? 1 : 0
+          const uY = side < 2 ? 0 : 1
+          const vX = side === 2 ? -1 : side === 3 ? 1 : 0
+          const vY = side === 0 ? -1 : side === 1 ? 1 : 0
+          let spout = -1
+          for (let v = 0; v < D; v++) {
+            for (let a = -hw; a <= hw; a++) {
+              const o = cell(a, v)
+              const c = plan[v * nA + a + hw]
+              let m = M_LAWN
+              let h = base
+              let floor = -1
+              if (c === G_WALK) m = ((a + v) & 1) ? 4 : 5
+              else if (c === G_HEDGE) { m = M_HEDGE; h = base + 1 }
+              else if (c === G_RIM) { m = M_STONE; h = base + 1 }
+              else if (c === G_WATER) m = M_POOL
+              else if (c === G_SPOUT) { m = M_PLINTH; h = base + 2; spout = o }
+              else if (c === G_STATUE) { m = M_PLINTH; h = base + 1 }
+              else if (c === G_FLOWER) { m = flowerAt(rnd()); h = base + 1 }
+              else if (c === G_CONE) { m = 36; h = base + 3 }
+              else if (c === G_CYPRESS) { m = 34; h = base + 7 + ((rnd() * 3) | 0); floor = base }
+              else if (c === G_URN) { m = M_PLINTH; h = base + 2 }
+              matMap[o] = m
+              heightMap[o] = h
+              floorMap[o] = floor < 0 ? h : floor
+              parkMap[o] = 2
+            }
+          }
+          const standOn = (o, kind) => {
+            const x = (o & NM) + 0.5
+            const y = (o >> NSHIFT) + 0.5
+            return { x, y, z: heightMap[o] }
+          }
+          for (const [a, v, kind, da, dv] of marks) {
+            const at = standOn(cell(a, v), kind)
+            const dx = da * uX + dv * vX
+            const dy = da * uY + dv * vY
+            props.push({ kind, x: at.x, y: at.y, z: at.z, yaw: Math.atan2(dx, -dy), alive: true })
+          }
+          if (spout >= 0) fountains.push({ x: (spout & NM) + 0.5, y: (spout >> NSHIFT) + 0.5, z: base + 2, alive: true })
+          // open the balustrade onto the garden: gravel, and an urn on a post at each end
+          for (let u = -yard; u < L + yard; u++) {
+            const o = cellU(u, -1)
+            if (u === -yard || u === L + yard - 1) {
+              matMap[o] = M_PLINTH
+              heightMap[o] = base + 2
+              floorMap[o] = base + 2
+              props.push({ kind: P_URN, x: (o & NM) + 0.5, y: (o >> NSHIFT) + 0.5, z: base + 2, yaw: 0, alive: true })
+            } else {
+              matMap[o] = ((u + 1) & 1) ? 4 : 5
+              heightMap[o] = base
+              floorMap[o] = base
+            }
+          }
+          return true
+        }
+      }
+    }
+    return false
+  }
+
   function placeHouses(rnd) {
     houses.length = 0
+    props.length = 0
+    fountains.length = 0
+    gardenN = 0
     houseMap.fill(0)
+    parkMap.fill(0)
     const tryVillage = (vx, vy, n) => {
       let placed = 0
-      for (let i = 0; i < n * 8 && placed < n; i++) {
-        const ox = ((rnd() - 0.5) * 52) | 0
-        const oy = ((rnd() - 0.5) * 52) | 0
+      for (let i = 0; i < n * 14 && placed < n; i++) {
+        const ox = ((rnd() - 0.5) * 62) | 0
+        const oy = ((rnd() - 0.5) * 62) | 0
         if (stampHouse((vx + ox) & NM, (vy + oy) & NM, rnd() > 0.5 ? 1 : 0, rnd)) placed++
       }
       return placed
@@ -1140,7 +1534,7 @@ export function createScene(initial) {
       const dist = 40 + rnd() * 220
       tryVillage((spawnX + Math.cos(ang) * dist) | 0, (spawnY + Math.sin(ang) * dist) | 0, 3 + ((rnd() * 4) | 0))
     }
-    for (let k = 0; k < 70; k++) {
+    for (let k = 0; k < 95; k++) {
       const x = (rnd() * N) | 0
       const y = (rnd() * N) | 0
       const m = matMap[(y << NSHIFT) | x]
@@ -1358,6 +1752,299 @@ export function createScene(initial) {
     }
   }
 
+  // Lakeside belvederes: by some of the houses near the water, a paved terrace at the shore with a
+  // balustrade along the water, a marble statue on a pedestal in its middle and an urn on a post at each
+  // end, two benches facing the view and flowers at the back. A paved promenade runs on from each end
+  // along the shore, two cells in from the water, with a bench now and then and flowers on the land
+  // side, and a gravel path leads up from the terrace to the house.
+  const views = [] // { x, y, ex, ey }: the shore cell in the middle of each terrace, and the way out to the water
+  const VIEW_R = 40
+  const VIEW_W = VIEW_R * 2 + 1
+  const viewDist = new Uint8Array(VIEW_W * VIEW_W)
+  const viewSeen = new Uint8Array(VIEW_W * VIEW_W)
+  const viewQ = new Int32Array(VIEW_W * VIEW_W)
+  const viewDepth = new Uint8Array(VIEW_W * VIEW_W)
+  function placeViewpoints(rnd) {
+    views.length = 0
+    const order = houses.map((_, i) => i)
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = (rnd() * (i + 1)) | 0
+      const t = order[i]
+      order[i] = order[j]
+      order[j] = t
+    }
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    for (const hi of order) {
+      if (views.length >= 16) break
+      const h = houses[hi]
+      const hx = (h.x + (h.w >> 1)) | 0
+      const hy = (h.y + (h.d >> 1)) | 0
+      const first = (rnd() * 4) | 0
+      let done = false
+      for (let k = 0; k < 4 && !done; k++) {
+        const [ex, ey] = dirs[(first + k) & 3]
+        // the first water out from the house this way
+        let r = 4
+        while (r < 44 && matAt(hx + ex * r, hy + ey * r) >= 4) r++
+        if (r >= 44) continue
+        // then along the shore a little either way, for a straight piece of it
+        for (const slide of [0, 6, -6, 12, -12]) {
+          const bx = hx + ex * (r - 8) - ey * slide
+          const by = hy + ey * (r - 8) + ex * slide
+          let j = 0
+          while (j < 16 && matAt(bx + ex * j, by + ey * j) >= 4) j++
+          if (j === 0 || j >= 16) continue
+          if (stampBelvedere((bx + ex * (j - 1)) & NM, (by + ey * (j - 1)) & NM, ex, ey, hx, hy, rnd)) {
+            done = true
+            break
+          }
+        }
+      }
+    }
+  }
+
+  // (sx, sy) is the last land before the water, out along (ex, ey); t runs along the shore, n out to the water
+  function stampBelvedere(sx, sy, ex, ey, hx, hy, rnd) {
+    const tx = -ey
+    const ty = ex
+    const at = (t, n) => ((((sy + ty * t + ey * n) & NM) << NSHIFT) | ((sx + tx * t + ex * n) & NM))
+    for (const v of views) if (wrapDelta(v.x, sx) ** 2 + wrapDelta(v.y, sy) ** 2 < 120 * 120) return false
+    for (const d of docks) if (wrapDelta(d.bx, sx) ** 2 + wrapDelta(d.by, sy) ** 2 < 36 * 36) return false
+    // open water in front, for the view
+    for (let n = 2; n <= 12; n++) if (matMap[at(0, n)] >= 4) return false
+    for (const t of [-4, 4]) for (let n = 2; n <= 6; n++) if (matMap[at(t, n)] >= 4) return false
+    // a straight enough shore, free land behind, no cliff
+    const th = Math.max(2, floorMap[at(0, 0)])
+    for (let t = -4; t <= 4; t++) {
+      for (let n = -4; n <= 1; n++) {
+        const o = at(t, n)
+        const m = matMap[o]
+        if (houseMap[o] || parkMap[o] || isBuilt(m) || m === 25 || m === 26 || m === 34) return false
+        if (n <= -2 && m < 4) return false
+        if (m >= 4 && floorMap[o] > th + 4) return false
+      }
+    }
+    // how far each cell round about is from the water, before the terrace fills some of it in
+    const ox = sx - VIEW_R
+    const oy = sy - VIEW_R
+    const wo = (i, j) => ((((oy + j) & NM) << NSHIFT) | ((ox + i) & NM))
+    viewDist.fill(255)
+    let qh = 0
+    let qt = 0
+    for (let j = 0; j < VIEW_W; j++) {
+      for (let i = 0; i < VIEW_W; i++) {
+        if (matMap[wo(i, j)] < 4) { viewDist[j * VIEW_W + i] = 0; viewQ[qt++] = j * VIEW_W + i }
+      }
+    }
+    while (qh < qt) {
+      const q = viewQ[qh++]
+      const d = viewDist[q]
+      if (d >= 5) continue
+      const i = q % VIEW_W
+      const j = (q / VIEW_W) | 0
+      for (let k = 0; k < 4; k++) {
+        const ni = i + (k === 0 ? 1 : k === 1 ? -1 : 0)
+        const nj = j + (k === 2 ? 1 : k === 3 ? -1 : 0)
+        if (ni < 0 || nj < 0 || ni >= VIEW_W || nj >= VIEW_W) continue
+        const nq = nj * VIEW_W + ni
+        if (viewDist[nq] !== 255) continue
+        viewDist[nq] = d + 1
+        viewQ[qt++] = nq
+      }
+    }
+    const main = flowerAt(rnd())
+    const bloom = () => (rnd() < 0.75 ? main : flowerAt(rnd()))
+    // the terrace
+    for (let t = -3; t <= 3; t++) {
+      for (let n = -3; n <= 1; n++) {
+        const o = at(t, n)
+        let m = M_PAVE[(t + n) & 1]
+        let h = th
+        if (n === 1) {
+          m = t === 0 || t === -3 || t === 3 ? M_PLINTH : 35 // the balustrade, with the pedestal and the posts
+          h = m === M_PLINTH ? th + 2 : th + 1
+        } else if (n === -3 && Math.abs(t) >= 2) {
+          m = bloom()
+          h = th + 1
+        }
+        matMap[o] = m
+        heightMap[o] = h
+        floorMap[o] = h
+        parkMap[o] = 3
+      }
+    }
+    const put = (o, kind, z, dx, dy) => props.push({ kind, x: (o & NM) + 0.5, y: (o >> NSHIFT) + 0.5, z, yaw: Math.atan2(dx, -dy), alive: true })
+    put(at(0, 1), rnd() < 0.5 ? 0 : 1, th + 2, -ex, -ey) // the statue looks back over the terrace
+    put(at(-3, 1), P_URN, th + 2, ex, ey)
+    put(at(3, 1), P_URN, th + 2, ex, ey)
+    put(at(-2, -1), P_BENCH, th, ex, ey)
+    put(at(2, -1), P_BENCH, th, ex, ey)
+    const benches = [[wrapPos(sx - tx * 2), wrapPos(sy - ty * 2)], [wrapPos(sx + tx * 2), wrapPos(sy + ty * 2)]]
+    // the promenade: the band two and three cells in from the water, followed from each end of the terrace
+    const reach = 22 + ((rnd() * 18) | 0)
+    viewSeen.fill(0)
+    qh = 0
+    qt = 0
+    const band = (q) => {
+      const d = viewDist[q]
+      if (d < 2 || d > 3) return false
+      const o = wo(q % VIEW_W, (q / VIEW_W) | 0)
+      const m = matMap[o]
+      return m >= 4 && !houseMap[o] && !parkMap[o] && !isBuilt(m) && m !== 25 && m !== 26 && !isTrunk(m) && m !== 34
+    }
+    for (const t of [-4, 4]) {
+      for (const n of [-1, -2]) {
+        const i = wrapDelta(sx + tx * t + ex * n, ox) | 0
+        const j = wrapDelta(sy + ty * t + ey * n, oy) | 0
+        const q = j * VIEW_W + i
+        if (i < 0 || j < 0 || i >= VIEW_W || j >= VIEW_W || viewSeen[q] || !band(q)) continue
+        viewSeen[q] = 1
+        viewDepth[q] = 0
+        viewQ[qt++] = q
+      }
+    }
+    while (qh < qt) {
+      const q = viewQ[qh++]
+      const i = q % VIEW_W
+      const j = (q / VIEW_W) | 0
+      if (viewDepth[q] >= reach) continue
+      for (let k = 0; k < 4; k++) {
+        const ni = i + (k === 0 ? 1 : k === 1 ? -1 : 0)
+        const nj = j + (k === 2 ? 1 : k === 3 ? -1 : 0)
+        if (ni < 1 || nj < 1 || ni >= VIEW_W - 1 || nj >= VIEW_W - 1) continue
+        const nq = nj * VIEW_W + ni
+        if (viewSeen[nq] || !band(nq)) continue
+        viewSeen[nq] = 1
+        viewDepth[nq] = viewDepth[q] + 1
+        viewQ[qt++] = nq
+      }
+    }
+    const pathN = qt
+    for (let p = 0; p < pathN; p++) {
+      const q = viewQ[p]
+      const o = wo(q % VIEW_W, (q / VIEW_W) | 0)
+      const h = Math.max(1, floorMap[o])
+      matMap[o] = M_PAVE[(q + ((q / VIEW_W) | 0)) & 1]
+      heightMap[o] = h
+      floorMap[o] = h
+      parkMap[o] = 3
+    }
+    for (let p = 0; p < pathN; p++) {
+      const q = viewQ[p]
+      if (viewDist[q] !== 3) continue
+      const i = q % VIEW_W
+      const j = (q / VIEW_W) | 0
+      // flowers on the land side
+      for (let k = 0; k < 4; k++) {
+        const ni = i + (k === 0 ? 1 : k === 1 ? -1 : 0)
+        const nj = j + (k === 2 ? 1 : k === 3 ? -1 : 0)
+        const nq = nj * VIEW_W + ni
+        if (viewDist[nq] !== 4 || rnd() > 0.2) continue
+        const o = wo(ni, nj)
+        const m = matMap[o]
+        if (m < 6 || m > 8 || parkMap[o] || houseMap[o]) continue
+        matMap[o] = bloom()
+        heightMap[o] = floorMap[o] + 1
+        parkMap[o] = 3
+      }
+      // a bench on a straight stretch, facing the water, well apart from the others
+      let fx = 0
+      let fy = 0
+      for (let k = 0; k < 4; k++) {
+        const di = k === 0 ? 1 : k === 1 ? -1 : 0
+        const dj = k === 2 ? 1 : k === 3 ? -1 : 0
+        if (viewDist[(j + dj) * VIEW_W + i + di] === 2 && viewSeen[(j + dj) * VIEW_W + i + di]) { fx = di; fy = dj }
+      }
+      if (fx === 0 && fy === 0) continue
+      const s1 = (j + fx) * VIEW_W + i - fy
+      const s2 = (j - fx) * VIEW_W + i + fy
+      if (!viewSeen[s1] || !viewSeen[s2] || viewDist[s1] !== 3 || viewDist[s2] !== 3) continue
+      const o = wo(i, j)
+      const bx = (o & NM) + 0.5
+      const by = (o >> NSHIFT) + 0.5
+      if (benches.some(([x, y]) => wrapDelta(x, bx) ** 2 + wrapDelta(y, by) ** 2 < 10 * 10)) continue
+      benches.push([bx, by])
+      props.push({ kind: P_BENCH, x: bx, y: by, z: heightMap[o], yaw: Math.atan2(fx, -fy), alive: true })
+    }
+    // a gravel path up to the house, until it meets the yard
+    let x = sx - ex * 4
+    let y = sy - ey * 4
+    let lastH = th
+    for (let step = 0; step < 60; step++) {
+      const o = (((y & NM) << NSHIFT) | (x & NM))
+      if (houseMap[o] || parkMap[o] === 1 || parkMap[o] === 2) break
+      const m = matMap[o]
+      if (parkMap[o] !== 3) {
+        if (m < 4 || isBuilt(m) || m === 25 || m === 26 || m === 34 || Math.abs(floorMap[o] - lastH) > 4) break
+        matMap[o] = ((x + y) & 1) ? 4 : 5
+        heightMap[o] = floorMap[o]
+        parkMap[o] = 3
+      }
+      lastH = floorMap[o]
+      const dx = wrapDelta(hx, x)
+      const dy = wrapDelta(hy, y)
+      if (dx === 0 && dy === 0) break
+      if (Math.abs(dx) > Math.abs(dy) || (Math.abs(dx) === Math.abs(dy) && (step & 1))) x += Math.sign(dx)
+      else y += Math.sign(dy)
+    }
+    views.push({ x: sx, y: sy, ex, ey })
+    return true
+  }
+
+  // Wildflowers: little patches of yellow and white over the open grass of the whole map, thick in
+  // some meadows and sparse in others, and half as many away from the houses. A patch is mostly one colour.
+  const NEAR_SHIFT = 4 // the near-a-house grid is in squares of 16 cells
+  const NEAR_N = N >> NEAR_SHIFT
+  const nearHouse = new Uint8Array(NEAR_N * NEAR_N)
+  function placeWildflowers(rnd) {
+    flowerN = 0
+    const STEP = 6
+    const corner = (i, j) => hash8((((i & 31) * 73) ^ ((j & 31) * 151)) + 977) / 255
+    // squares within about 40 of a house
+    nearHouse.fill(0)
+    const NM2 = NEAR_N - 1
+    for (const h of houses) {
+      const qx = (h.x + (h.w >> 1)) >> NEAR_SHIFT
+      const qy = (h.y + (h.d >> 1)) >> NEAR_SHIFT
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dx = -3; dx <= 3; dx++) {
+          if (dx * dx + dy * dy <= 9) nearHouse[(((qy + dy) & NM2) * NEAR_N) + ((qx + dx) & NM2)] = 1
+        }
+      }
+    }
+    for (let gy = 0; gy < N; gy += STEP) {
+      for (let gx = 0; gx < N; gx += STEP) {
+        const fx = gx / 64
+        const fy = gy / 64
+        const ix = fx | 0
+        const iy = fy | 0
+        const u = fx - ix
+        const w = fy - iy
+        const top = corner(ix, iy) * (1 - u) + corner(ix + 1, iy) * u
+        const bottom = corner(ix, iy + 1) * (1 - u) + corner(ix + 1, iy + 1) * u
+        const dens = top * (1 - w) + bottom * w
+        const near = nearHouse[((gy >> NEAR_SHIFT) * NEAR_N) + (gx >> NEAR_SHIFT)] === 1
+        if (rnd() >= (dens - 0.3) * (near ? 0.48 : 0.24)) continue
+        const x0 = gx + ((rnd() * STEP) | 0)
+        const y0 = gy + ((rnd() * STEP) | 0)
+        const r = 0.8 + rnd() * 1.8
+        const ri = Math.ceil(r)
+        const main = flowerAt(rnd())
+        for (let dy = -ri; dy <= ri; dy++) {
+          for (let dx = -ri; dx <= ri; dx++) {
+            if (dx * dx + dy * dy > r * r || rnd() > 0.7) continue
+            const o = (((y0 + dy) & NM) << NSHIFT) | ((x0 + dx) & NM)
+            const m = matMap[o]
+            if (m < 6 || m > 8 || parkMap[o] || houseMap[o]) continue
+            matMap[o] = rnd() < 0.8 ? main : flowerAt(rnd())
+            heightMap[o] = floorMap[o] + 1
+            flowerN++
+          }
+        }
+      }
+    }
+  }
+
   function placeBoats(rnd) {
     const freeGoal = boats.length + 8
     const tryBoat = (x, y) => {
@@ -1395,6 +2082,85 @@ export function createScene(initial) {
     }
     for (let k = 0; k < 400 && boats.length < freeGoal; k++) {
       tryBoat((rnd() * N) | 0, (rnd() * N) | 0)
+    }
+  }
+
+  // Birds, few on the whole map. Gulls: 8 colonies of 2–4 over the water by a shore, the first near
+  // the start. Swallows: 6 flocks of 3–5 over the land beside a village, the first by the house
+  // nearest the start.
+  function placeBirds(rnd) {
+    birds.length = 0
+    const apart = (x, y, kind, d) => birds.every((b) => b.kind !== kind || wrapDelta(b.ax, x) ** 2 + wrapDelta(b.ay, y) ** 2 > d * d)
+    for (let c = 0; c < 8; c++) {
+      let x = 0
+      let y = 0
+      let found = false
+      for (let t = 0; t < 300 && !found; t++) {
+        const ang = rnd() * Math.PI * 2
+        const dist = 60 + rnd() * 200
+        x = c === 0 ? (spawnX + Math.cos(ang) * dist) | 0 : (rnd() * N) | 0
+        y = c === 0 ? (spawnY + Math.sin(ang) * dist) | 0 : (rnd() * N) | 0
+        const m = matAt(x, y)
+        if (m < 1 || m > 3) continue
+        let land = 0
+        for (let a = 0; a < 8; a++) if (matAt(x + Math.cos(a * 0.785) * 22, y + Math.sin(a * 0.785) * 22) >= 4) land++
+        if (land < 1 || land > 5 || !apart(x, y, 0, 220)) continue
+        found = true
+      }
+      if (!found) continue
+      const n = 2 + ((rnd() * 3) | 0)
+      const dir = rnd() < 0.5 ? -1 : 1
+      for (let i = 0; i < n; i++) {
+        birds.push({
+          kind: 0, ax: wrapPos(x + (rnd() - 0.5) * 8), ay: wrapPos(y + (rnd() - 0.5) * 8), az: 10 + rnd() * 6,
+          r: 10 + rnd() * 8, w: dir * (0.35 + rnd() * 0.15), ph: rnd() * Math.PI * 2,
+        })
+      }
+    }
+    if (houses.length === 0) return
+    const order = houses.map((_, i) => i)
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = (rnd() * (i + 1)) | 0
+      const t = order[i]
+      order[i] = order[j]
+      order[j] = t
+    }
+    let nearest = 0
+    for (let i = 1; i < houses.length; i++) {
+      if (wrapDelta(houses[i].x, spawnX) ** 2 + wrapDelta(houses[i].y, spawnY) ** 2 < wrapDelta(houses[nearest].x, spawnX) ** 2 + wrapDelta(houses[nearest].y, spawnY) ** 2) nearest = i
+    }
+    order.unshift(nearest)
+    let flocks = 0
+    for (const hi of order) {
+      if (flocks >= 6) break
+      const h = houses[hi]
+      const hx = h.x + (h.w >> 1)
+      const hy = h.y + (h.d >> 1)
+      let x = 0
+      let y = 0
+      let found = false
+      for (let t = 0; t < 8 && !found; t++) {
+        const ang = rnd() * Math.PI * 2
+        x = Math.round(hx + Math.cos(ang) * 22)
+        y = Math.round(hy + Math.sin(ang) * 22)
+        const m = matAt(x, y)
+        found = m >= 6 && m <= 8 && apart(x, y, 1, 160)
+      }
+      if (!found) continue
+      // clear of the houses and trees round about
+      let top = 0
+      for (let dy = -20; dy <= 20; dy += 2) {
+        for (let dx = -20; dx <= 20; dx += 2) top = Math.max(top, heightMap[(((y + dy) & NM) << NSHIFT) | ((x + dx) & NM)])
+      }
+      const n = 3 + ((rnd() * 3) | 0)
+      for (let i = 0; i < n; i++) {
+        const w1 = 0.9 + rnd() * 0.4
+        birds.push({
+          kind: 1, ax: wrapPos(x + (rnd() - 0.5) * 6), ay: wrapPos(y + (rnd() - 0.5) * 6), az: Math.min(top + 3 + rnd() * 3, CLOUD_ALT - 8),
+          rx: 9 + rnd() * 6, ry: 7 + rnd() * 6, w1, w2: w1 * (1.3 + rnd() * 0.4), ph: rnd() * Math.PI * 2, ph2: rnd() * Math.PI * 2,
+        })
+      }
+      flocks++
     }
   }
 
@@ -1877,7 +2643,7 @@ export function createScene(initial) {
           houseMap[o] = 0
           heightMap[o] = house.base + 1 + ((dx + dy) & 1)
           matMap[o] = ((dx * 3 + dy * 5) & 3) === 0 ? 24 : 23
-        } else if ((matMap[o] >= 6 && matMap[o] <= 8) || isTree(matMap[o]) || matMap[o] === 34 || matMap[o] === 36) {
+        } else if (isGreen(matMap[o])) {
           matMap[o] = 24
         }
       }
@@ -1924,9 +2690,12 @@ export function createScene(initial) {
         const fall = Math.round((1 - Math.sqrt(d2) / r) * (water ? 2 : 9))
         heightMap[o] = Math.max(isBuilt(m) ? houses[hid - 1]?.base || 0 : 0, heightMap[o] - fall)
         if (d2 < (r * 0.55) * (r * 0.55)) matMap[o] = d2 < 8 ? 24 : 23
-        else if (((m >= 6 && m <= 8) || isTree(m) || m === 34 || m === 36) && d2 < r * r * 0.85) matMap[o] = 24
+        else if (isGreen(m) && d2 < r * r * 0.85) matMap[o] = 24
       }
     }
+    // statues, benches, urns and fountains in the blast are knocked down
+    for (const s of props) if (s.alive && wrapDelta(s.x, wx) ** 2 + wrapDelta(s.y, wy) ** 2 < r * r) s.alive = false
+    for (const f of fountains) if (f.alive && wrapDelta(f.x, wx) ** 2 + wrapDelta(f.y, wy) ** 2 < r * r) f.alive = false
     if (blasts.length < BLAST_N) blasts.push({ x: wx, y: wy, z: wz, t: time, life: water ? 0.28 : 0.55, r: water ? 7 : 16 })
     const n = water ? 12 : 36
     for (let i = 0; i < n; i++) {
@@ -1959,6 +2728,7 @@ export function createScene(initial) {
     const m = matMap[o]
     if (isTrunk(m) || m === 34) return false // tree trunk or cypress; the canopy can be walked under
     if (isBuilt(m)) return false
+    if (m === M_HEDGE || m === M_POOL || m === M_PLINTH) return false // the hedge, the fountain, a statue
     return m >= 4
   }
   function walkFloor(x, y) {
@@ -2744,6 +3514,10 @@ export function createScene(initial) {
     const sy = sunY
     const isc = 1 / jetSize()
     const reach = JET_L * 0.75 * jetSize() + 3
+    // flowers only show near the ground: on foot or aboard, or from the plane flying low in the chase
+    // and cockpit views; never from the view overhead. Elsewhere a flower cell is plain green.
+    const lead = jets[0]
+    const blooms = onFoot || (viewTarget !== 0 && lead.z - groundAt(lead.x, lead.y) < BLOOM_ALT)
     let nShadow = 0
     if (p.shadow && introT > 0.3) {
       for (let j = 0; j < jets.length && j < 3; j++) {
@@ -2922,6 +3696,12 @@ export function createScene(initial) {
         } else {
           top = shade ? topShade[mat] : topLit[mat]
           side = shade ? sideShade[mat] : sideLit[mat]
+          // a flower is a small bloom in the middle of its cell, with green leaves round it
+          if (BLOOM[mat] === 1) {
+            const fx = wx - gx - 0.5
+            const fy = wy - gy - 0.5
+            if (!blooms || fx * fx + fy * fy > 0.09) top = shade ? topShade[6] : topLit[6]
+          }
         }
         if (fog > 0) {
           top = mixHaze(top, keep, fog)
@@ -2937,7 +3717,7 @@ export function createScene(initial) {
             for (let y = yR, o = yR * W + px; y < cY; y++, o += W) {
               if (_fb[o] !== 0) continue
               const k = h - (Rp - y) / mp - 0.8
-              _fb[o] = k > 0 && k % FLOOR_H < 1.3 ? sh : side
+              _fb[o] = k > 0 && k % FLOOR_H < 1.5 ? sh : side
               _zb[o] = v
             }
           } else {
@@ -3942,6 +4722,131 @@ export function createScene(initial) {
 
   const swingC = new Float32Array(5)
   const swingS = new Float32Array(5)
+  // the statues, benches and urns, and the spray of each fountain: a jet from the spout falling in four arcs
+  function drawGardens() {
+    if (props.length === 0 && fountains.length === 0) return
+    ensureAkey()
+    const onScreen = (x, y, z, reach) => {
+      if (!project(x, y, z)) return false
+      const r = prM * reach + 2
+      return prX > -r && prX < W + r && prY > -r * 1.5 && prY < H + r
+    }
+    for (const s of props) {
+      if (!s.alive) continue
+      const x = s.x - N * Math.round((s.x - cam.x) / N)
+      const y = s.y - N * Math.round((s.y - cam.y) / N)
+      if ((x - cam.x) ** 2 + (y - cam.y) ** 2 > 780 * 780 || !onScreen(x, y, s.z, 4)) continue
+      const M = PROPS[s.kind]
+      voxBegin(x, y, s.z, s.yaw, 0, 0, PROP_G)
+      rasterVox(M.A, M.F, M.Z, M.NA, M.NF, M.NZ, M.K, M.n)
+      voxEnd()
+    }
+    for (const f of fountains) {
+      if (!f.alive) continue
+      const x = f.x - N * Math.round((f.x - cam.x) / N)
+      const y = f.y - N * Math.round((f.y - cam.y) / N)
+      if (!onScreen(x, y, f.z, 3)) continue
+      rigN = 0
+      const t = time + f.x * 0.37
+      for (let k = 0; k < 6; k++) {
+        if (((k + ((t * 12) | 0)) & 3) === 0) continue // drops, not a solid rod
+        rigVox(0, 0, 0.1 + k * 0.2, YM_SPRAY, 0, 0, 1)
+      }
+      for (let arm = 0; arm < 4; arm++) {
+        const a = arm * (Math.PI / 2) + Math.PI / 4
+        const ca = Math.cos(a)
+        const sa = Math.sin(a)
+        for (let i = 0; i < 5; i++) {
+          const u = (i / 5 + t * 0.9) % 1
+          const r = 0.2 + u * 1.0
+          rigVox(ca * r, sa * r, 1.1 + 0.6 * u - 3.0 * u * u, YM_SPRAY, ca, sa, 0.6)
+        }
+      }
+      voxBegin(x, y, f.z, 0, 0, 0, 0.2)
+      rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, rigN)
+      voxEnd()
+    }
+  }
+
+  // the birds: each frame works out where each one is on its path, which way it heads, how it banks
+  // into the turn and how its wings beat. Gulls glide with the wings a little raised and flap now and
+  // then; swallows beat fast, with short glides.
+  function drawBirds() {
+    if (birds.length === 0) return
+    ensureAkey()
+    const t = time
+    for (const b of birds) {
+      let x
+      let y
+      let z
+      let dx
+      let dy
+      let heel
+      let flap
+      if (b.kind === 0) {
+        const th = b.w * t + b.ph
+        x = b.ax + Math.cos(th) * b.r
+        y = b.ay + Math.sin(th) * b.r
+        z = b.az + 1.2 * Math.sin(0.5 * t + b.ph)
+        dx = -Math.sin(th) * b.w
+        dy = Math.cos(th) * b.w
+        heel = b.w > 0 ? 0.3 : -0.3
+        flap = Math.sin(0.6 * t + b.ph * 3) > 0.35 ? 0.55 * Math.sin(6.5 * t + b.ph) : 0.12
+      } else {
+        const u = b.w1 * t + b.ph
+        const v = b.w2 * t + b.ph2
+        x = b.ax + b.rx * Math.sin(u)
+        y = b.ay + b.ry * Math.sin(v)
+        z = b.az + 1.5 * Math.sin(1.7 * t + b.ph)
+        dx = b.rx * b.w1 * Math.cos(u)
+        dy = b.ry * b.w2 * Math.cos(v)
+        const ax = -b.rx * b.w1 * b.w1 * Math.sin(u)
+        const ay = -b.ry * b.w2 * b.w2 * Math.sin(v)
+        // the sideways pull of the turn (positive to the right) sets the bank
+        heel = clamp((dx * ay - dy * ax) / ((Math.hypot(dx, dy) + 1e-6) * 25), -0.7, 0.7)
+        flap = Math.sin(1.3 * t + b.ph) > 0.5 ? -0.05 : 0.6 * Math.sin(16 * t + b.ph)
+      }
+      x = x - N * Math.round((x - cam.x) / N)
+      y = y - N * Math.round((y - cam.y) / N)
+      if ((x - cam.x) ** 2 + (y - cam.y) ** 2 > 600 * 600) continue
+      if (!project(x, y, z)) continue
+      const reach = prM * 3 + 2
+      if (prX < -reach || prX > W + reach || prY < -reach || prY > H + reach) continue
+      // the wings turn about the shoulder: up on both sides together
+      const M = BIRDS[b.kind]
+      const sh = BIRD_SHOULDER[b.kind]
+      const cf = Math.cos(flap)
+      const sf = Math.sin(flap)
+      for (let i = 0; i < M.n; i++) {
+        const part = M.P[i]
+        let a = M.A[i]
+        let zz = M.Z[i]
+        let na = M.NA[i]
+        let nz = M.NZ[i]
+        if (part !== 0) {
+          const s = part === 1 ? -sf : sf
+          const pa = part === 1 ? -sh : sh
+          const da = a - pa
+          a = pa + da * cf - zz * s
+          zz = da * s + zz * cf
+          const na0 = na
+          na = na0 * cf - nz * s
+          nz = na0 * s + nz * cf
+        }
+        rigA[i] = a
+        rigF[i] = M.F[i]
+        rigZ[i] = zz
+        rigNA[i] = na
+        rigNF[i] = M.NF[i]
+        rigNZ[i] = nz
+        rigK[i] = M.K[i]
+      }
+      voxBegin(x, y, z, Math.atan2(dx, -dy), heel, 0, BIRD_G[b.kind])
+      rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, M.n)
+      voxEnd()
+    }
+  }
+
   function drawWalker() {
     if (!onFoot || footView !== 0 || aboard >= 0) return
     ensureAkey()
@@ -4440,7 +5345,9 @@ export function createScene(initial) {
     drawSmoke()
     drawBombs()
     drawSeaLife()
+    drawGardens()
     drawBoats()
+    drawBirds()
     drawWalker()
     // far jets first
     const order = jets.map((j, i) => ({ i, d: (j.x - cam.x) * vSin + (j.y - cam.y) * vCos }))

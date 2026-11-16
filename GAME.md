@@ -1,6 +1,6 @@
-# Enzo
+# Enzo's day
 
-Notes for picking this project up later. The flight, the islands, and the pixel look started as a remix of https://remix.ui8.ai/fly (Forge share, remix enabled), which flew a fighter jet. Here it became Enzo: a 1920s biplane (yellow wings, blue fuselage, radial engine) over Lake Como–style islands, with houses, bombs, a person, boats, docks, sea life, and wind added. The code still calls the plane "the jet" (`jets`, `drawJet`, `jet-model.ts`, `FighterJetScene`).
+Notes for picking this project up later. The flight, the islands, and the pixel look started as a remix of https://remix.ui8.ai/fly (Forge share, remix enabled), which flew a fighter jet. Here it became Enzo's day: a 1920s biplane (yellow wings, blue fuselage, radial engine) over Lake Como–style islands, with houses, bombs, a person, boats, docks, sea life, and wind added. The code still calls the plane "the jet" (`jets`, `drawJet`, `jet-model.ts`). The React component is `EnzoScene`.
 
 There is no 3D engine and no polygon mesh. One software renderer paints a low-resolution buffer. The page scales that buffer with `image-rendering: pixelated`.
 
@@ -12,16 +12,16 @@ npm run dev
 npm run build
 ```
 
-Vite 7, React 19, Tailwind 4. Entry is `src/main.jsx`. It mounts `FighterJetScene` with the saved demo values (speed 74, seed 7, land 0.33, overhead view). The page title is "Enzo". `src/index.css` only makes the page fill the window on `#2468b4`.
+Vite 7, React 19, Tailwind 4. Entry is `src/main.jsx`. It mounts `EnzoScene` with the saved demo values (speed 74, seed 7, land 0.33, overhead view). The page title is "Enzo's day". `src/index.css` only makes the page fill the window on `#2468b4`.
 
-React StrictMode runs the canvas effect twice. `FighterJetScene` must call `scene.resize` when `scene.width` / `scene.height` do not match the buffer, not only when the canvas element changes size. The frame is copied with `image.data.set(bytes)` rather than sharing the buffer.
+React StrictMode runs the canvas effect twice. `EnzoScene` must call `scene.resize` when `scene.width` / `scene.height` do not match the buffer, not only when the canvas element changes size. The frame is copied with `image.data.set(bytes)` rather than sharing the buffer.
 
 ## Files
 
 | File | What it is |
 | --- | --- |
 | `src/main.jsx` | Mounts the scene with the demo parameters. |
-| `src/FighterJetScene.jsx` | Keys, pointer, touch buttons, hint text, the animation loop. |
+| `src/EnzoScene.jsx` | Keys, pointer, touch buttons, hint text, the animation loop. |
 | `src/lib/scene.ts` | World, simulation, sprite-stack renderer, villas, yachts, fish and whales, person, bombs. |
 | `src/lib/jet-model.ts` | The biplane, built in code by `decodeJet()` as 14 slices of 44 across × 34 along. Palette families: body (blue), accent (yellow wings), metal, and fixed colours. |
 | `src/lib/cockpit.ts` | The open biplane cockpit, painted once as three depth layers, then shifted each frame with the pilot’s head. Gauges, propeller and stick are drawn live. |
@@ -69,7 +69,7 @@ Click (pointer down and up in under 0.2s) barrel-rolls the plane. Holding the po
 
 ## Controls
 
-`FighterJetScene` keeps the keys that are down and calls `setKeys`, `setWalk`, `setBomb`.
+`EnzoScene` keeps the keys that are down and calls `setKeys`, `setWalk`, `setBomb`.
 
 | Key | Flying | On foot, walking | On foot, in a boat |
 | --- | --- | --- | --- |
@@ -142,7 +142,7 @@ The map is `N = 2048` and wraps. Index of `(x, y)` is `(y << 11) | x`, masked wi
 
    A grove is a patch of about 32 cells sharing one hash (`grove`), so kinds come in stands. One tree in 8 is a stray leafy tree in any grove.
 5. Spawn is open water (material 0–2) with some land within 120, not surrounded by it.
-6. Villages, then docks, then free boats.
+6. Villages with their gardens, then docks, then lakeside viewpoints, then wildflowers, then free boats, then birds.
 7. About 200 cloud streaks on the 1024 map. Each cell stores a rank and a thickness. `clouds` shows ranks below a cutoff, so the slider adds or removes whole clouds. They drift slowly (`time * 7` on the cloud map). Clouds sit at `CLOUD_ALT` (40) and stack up to 8 (`CK`). `ZTOP` is 48.
 
 Height of drawn columns is capped by `HMAX` (40). The jet’s clearance looks at the ground ahead, including trees and houses.
@@ -171,8 +171,17 @@ Height of drawn columns is capped by `HMAX` (40). The jet’s clearance looks at
 | 36 | Topiary. |
 | 37–39 | Fir: trunk, needles, edge. |
 | 40–42 | Round-crowned tree: trunk, leaves, edge. |
+| 43 | Box hedge. |
+| 44 | Stone: fountain and canal rims. |
+| 45 | Fountain water. |
+| 46 | Plinth: statue plinths, fountain spouts, urn posts. |
+| 47–49 | Flowers: pink (no longer used), yellow, white. The side colour is green, for the stems. `drawWorld` draws yellow and white (`BLOOM`) as a small bloom: only the middle of the cell's top (radius 0.3) has the flower's colour, the rest is grass green. Blooms only show near the ground: on foot or aboard, or in the chase and cockpit views while the plane is under `BLOOM_ALT` (16) above the ground. In the overhead flight view, or flying higher, a flower cell is plain green. |
+| 50 | Clipped lawn. |
+| 51–52 | Paving, light and dark: lakeside terraces and promenades. |
 
 Trees of every kind go through `isTree(m)` and `isTrunk(m)` (built from `TREE_KINDS`), not through index ranges. Houses avoid them, yards clear them, bombs scorch them, `standable` rejects trunks, `walkFloor` reads `floorMap` under them, and docks do not pave over trunks. A new tree kind needs an entry in `TREE_KINDS` and colours in both palettes.
+
+`isGreen(m)` is grass, trees, cypresses, topiary, hedges, flowers and lawn: what a bomb scorches.
 
 Water is anything `< 4`. The person and the boats treat `>= 4` as solid. `isBuilt(m)` is walls, roofs and towers (17–22, 27–33): not walkable, and a bomb knocks them down to the house's floor. `WALLS[i]` and `WINDOWED[i]` pair a wall colour with its windowed version.
 
@@ -180,21 +189,44 @@ Water is anything `< 4`. The person and the boats treat `>= 4` as solid. `isBuil
 
 Villages prefer grass near water, with a cluster near the spawn coast so there is something to bomb at once. The look is a lake-shore Italian village: stucco walls in ochre, cream, salmon or pale yellow, terracotta hip roofs, green shutters, cypresses. `stampHouse` makes one of two kinds:
 
-- **Villa** (40%): 9–11 by 10–13, 2 or 3 floors, a 3-cell yard. The outer ring is a stone balustrade (35) with gaps for gates, then garden, then a gravel walk against the walls. About half get a 3 by 3 bell tower (32) at one corner, 4 above the eaves, with a cap (33).
-- **Townhouse**: 6–8 by 7–9, 2 floors, a 2-cell yard of gravel and garden.
+- **Villa** (40%): 11–13 by 12–15, 2 or 3 floors, a 3-cell yard. The outer ring is a stone balustrade (35) with gaps for gates, then garden, then a gravel walk against the walls. About half get a 3 by 3 bell tower (32) at one corner, 5 above the eaves, with a cap (33). Most also get a formal garden on one side (see Gardens).
+- **Townhouse**: 7–9 by 8–10, 2 floors, a 2-cell yard of gravel and garden.
 
-Wall height is `floors * FLOOR_H` (2.5) above the floor. Edge cells are the wall colour, and every other non-corner edge cell uses the windowed version (28–31). The interior is a hip roof: height rises with the distance in from the edge, cells on a hip line (two sides tie) are 20, west and north faces 22 (sunny), east and south faces 21 (shaded). Gardens get 2–4 cypresses (34, 7–10 tall) and 1–3 topiary domes (36). Trees in the yard are cleared. `houseMap` stores the house id on footprint cells. `houses[]` keeps `{x, y, w, d, base, alive}`.
+Wall height is `floors * FLOOR_H` (3) above the floor. Edge cells are the wall colour, and every other non-corner edge cell uses the windowed version (28–31). The interior is a hip roof: height rises with the distance in from the edge, cells on a hip line (two sides tie) are 20, west and north faces 22 (sunny), east and south faces 21 (shaded). Gardens get 2–4 cypresses (34, 7–10 tall), 1–3 topiary domes (36), and flowers on about one cell in seven along the ring. Trees in the yard are cleared. `houseMap` stores the house id on footprint cells. `houses[]` keeps `{x, y, w, d, base, alive}`.
 
-Shutters are not cells. `drawWorld` paints them while it fills a wall column of a windowed material: it recovers the height of each pixel row from the previous depth step's `R` and `m` (`Rp`, `mp`) and draws a band of `shutterLit` or `shutterShade` for 1.3 of every 2.5 units of height, so each floor shows one row of windows in every view.
+Shutters are not cells. `drawWorld` paints them while it fills a wall column of a windowed material: it recovers the height of each pixel row from the previous depth step's `R` and `m` (`Rp`, `mp`) and draws a band of `shutterLit` or `shutterShade` for 1.5 of every `FLOOR_H` (3) units of height, so each floor shows one row of windows in every view.
 
 Bombs come from the jet only. B held calls `dropBomb` every 0.38s, up to 18 in the air. A bomb inherits some of the jet’s horizontal speed, starts a little under the jet, and falls (gravity 95, terminal about 220). It explodes at the ground.
 
 - On land the radius is 12. On water it is 6.
 - Any house touched is wrecked once: footprint becomes rubble (23) and scorch (24), one cell tall above the old floor. The yard around it scorches.
-- Other land in the inner blast is cratered (height drops, scorch or rubble). Grass, trees, cypresses and topiary in the outer part scorch.
+- Other land in the inner blast is cratered (height drops, scorch or rubble). Anything `isGreen` in the outer part scorches.
+- Statues, benches, urns and fountain sprays inside the radius are knocked down (`alive = false`).
 - Sparks and smoke. Water explosions are smaller and shorter.
 
 The person cannot drop bombs. `setBomb(false)` is forced while on foot.
+
+## Gardens
+
+`parkMap` (one byte a cell) records what a cell already belongs to: 1 a house and its yard, 2 a villa garden, 3 a lakeside terrace, promenade or path. Every layout checks it is 0 before it builds, and `stampHouse` rejects a footprint or yard that touches any of it, so layouts never run over each other. Docks come after and skip materials 32 and up.
+
+**Villa gardens.** `stampGarden` runs for each villa after its yard. It tries the three layouts, starting from a random one, on the four sides in random order, deepest first (`GARDEN_DEPTHS`), and takes the first that fits: every cell open grass or trees, not in `houseMap` or `parkMap`, and within 4 of the house's floor. The garden is as wide as the yard plus the house on that side, made odd so it is symmetric about the gate's axis, and levelled to the floor. It is open: no hedge round it. The balustrade on that side becomes gravel, with an urn on a post at each end.
+
+`planGarden` paints a plan of codes (`G_LAWN`, `G_WALK`, `G_HEDGE`, …) in garden coordinates, `a` across from the axis and `v` out from the balustrade. Props are placed with a facing in the same coordinates, turned into a world yaw from the side.
+
+- 0, parterre (depth 13 or 11): gravel; four box-edged beds of flowers; a round fountain on the crossing with a stone rim, the gravel round it cutting the beds' inner corners; topiary cones at the beds' outer corners and either side of the entrance; benches at the ends of the cross walk; a statue closing the axis.
+- 1, canal (12, 10 or 8): lawn; a gravel forecourt; a stone-rimmed canal 3 wide on the axis, a fountain near the far end and urns on the rim's corners; gravel walks either side with benches facing the water; flower borders; cypresses every third cell; a statue at the end.
+- 2, knot garden (13 or 11): gravel; four square beds of clipped box, 5 or 4 on a side, drawn as an X in two opposite beds and a cross in the other two, with flowers between; a statue in the middle with flowers on its diagonals; cones at the beds' outer corners; benches at the ends of the cross walk; lawn with a few flowers beyond.
+
+Raised cells: hedge, rim, flowers and statue plinths 1 above the floor, spout and urn posts 2, cones 3, cypresses 7–9.
+
+**Lakeside viewpoints.** `placeViewpoints` runs after the docks, over the houses in random order, up to 16, at least 120 apart and 36 from a dock's boat. From a house it looks out in the four compass directions for water within 44, then slides along the shore up to 12 either way for a spot `stampBelvedere` accepts: water straight out for 12 cells and either side, a straight enough shore, free land behind, no cliff. The terrace is 7 along the shore by 5, paved, at the shore's height but at least 2, and may fill in the water's edge. Along the water is the balustrade, with a statue on a pedestal in the middle looking back over the terrace and an urn on a post at each end. Two benches face the view and a strip of flowers runs along the back. `views[]` keeps `{x, y, ex, ey}`: the shore cell in the middle and the way out to the water.
+
+The promenade follows the shore from both ends of the terrace. A breadth-first search in a window of 81 by 81 measures each land cell's 4-connected distance from the water, before the terrace fills any in. The promenade is the band at distance 2 and 3, flooded from the terrace's ends for 22–39 steps, paved at the ground's height (at least 1). It stops at houses, gardens, docks, trunks and cypresses. Benches go on the land side of straight stretches, facing the water, at least 10 apart, and flowers grow on one in five cells along the land side of the band. A one-cell gravel path then runs from the back of the terrace toward the house, a step at a time on whichever axis is farther, until it meets the yard.
+
+**Wildflowers.** `placeWildflowers` runs last. Every 6 cells it may start a patch, with a chance set by a smooth meadow field (bilinear over a hash grid of 64-cell squares), so some slopes are thick with flowers and others bare. The chance is `(dens − 0.3) × 0.48` within about 40 of a house (`nearHouse`, a grid of 16-cell squares) and half that elsewhere, so about 10,000 flower cells on a map. A patch has a radius of 0.8–2.6 and fills about 70% of its cells, mostly in one colour. `flowerAt` gives yellow or white, half and half, everywhere: beds, rings, terraces and meadows. Only open grass outside `parkMap` and houses. A flower cell is 1 above `floorMap`.
+
+**Props** are `props[]` `{kind, x, y, z, yaw, alive}`, models in `PROPS`: surface voxels of `PROP_G` (0.2) built by `propModel(build, g)`. Its `box` takes an optional part tag, kept in the model's `P`, and a box one voxel thick is a plate whose voxels all face up. Kinds 0 and 1 are marble statues (an orator with the right arm raised, a figure with a staff), about 3.4 tall. 2 is a bench, dark brown slats on a dark iron frame, 2.8 long, the sitter facing forward. 3 is an urn of yellow flowers. Their colours are boat materials (`YM_MARBLE`, `YM_WOOD`, `YM_IRON`, `YM_BLOOM`, `YM_LEAF`). `fountains[]` `{x, y, z, alive}` are the spouts. `drawGardens` draws the props within 780 of the camera and on screen, then each fountain's spray: a dotted jet up from the spout and four arcs of drops falling outward.
 
 ## Person
 
@@ -204,7 +236,7 @@ The figure is `PERSON`: boxes of surface voxels (`PERSON_G` 0.25) with normals, 
 
 Walking speed is 20. Turn rate is 2.1 rad/s. Forward is the same axis as the jet, `(sin(yaw), -cos(yaw))`.
 
-`standable` rejects water, house cells, tree trunks of any kind (`isTrunk`), cypresses (34), and anything `isBuilt`. Leaves, sand, grass, rock, snow, gravel, garden, balustrade, topiary and dock planks are allowed. `canStep` also rejects a step up greater than 4. Down is free. `walkFloor` returns `floorMap` on trunk and leaf cells, otherwise `heightMap`, so the person stands on the ground under the trees and the close camera does not climb onto the canopy.
+`standable` rejects water, house cells, tree trunks of any kind (`isTrunk`), cypresses (34), anything `isBuilt`, and box hedge, fountain water and plinths (43, 45, 46). Leaves, sand, grass, rock, snow, gravel, garden, flowers, paving, balustrade, topiary and dock planks are allowed. Benches are props, not cells, so the person walks through them. `canStep` also rejects a step up greater than 4. Down is free. `walkFloor` returns `floorMap` on trunk and leaf cells, otherwise `heightMap`, so the person stands on the ground under the trees and the close camera does not climb onto the canopy.
 
 Cameras while walking (`footView` 0 overhead, 1 first):
 
@@ -277,6 +309,15 @@ Fish and whale bodies are flat shapes under the surface, drawn with `rasterFlat`
 
 `placeLife` runs at the end of `buildWorld`, so a new seed replaces them. `stepLife` moves them. `drawSeaLife` runs just before the boats.
 
+## Birds
+
+Two kinds, and few of them: about 45 on a map. `birds[]` holds each one's path, not its position. `drawBirds` works out where it is from `time`, so there is no step function and nothing to save.
+
+- **Gulls** (kind 0): 8 colonies of 2 to 4, over shallow water (material 1–3) with land on 1 to 5 of 8 rays 22 out, so by a shore but not in a cove. Colonies are at least 220 apart, and the first is 60 to 260 from the spawn. Each gull circles its point at radius 10–18, at 10–16 up with a slow rise and fall, the whole colony turning the same way. It banks 0.3 into the circle and glides with the wings a little raised, flapping for a while now and then. White body, grey wings with black tips, yellow bill.
+- **Swallows** (kind 1): 6 flocks of 3 to 5, over grass (material 6–8) 22 from a house, flocks at least 160 apart. Houses are tried in random order after the one nearest the spawn. A swallow flies a Lissajous loop (9–15 by 7–13, the two rates 1.3 to 1.7 apart) a few cells above the highest roof or tree within 20, and below the clouds. It banks with the sideways pull of its turn, up to 0.7, and beats its wings fast with short glides. Dark blue back and forked tail, pale belly, rust throat.
+
+The models are `BIRDS`, built with `propModel` at `BIRD_G` (0.25 and 0.2). The wing voxels are tagged part 1 (left) and 2 (right), and `drawBirds` turns them about the shoulder (`BIRD_SHOULDER`) by the flap angle, both sides up together, normals included. Birds are drawn within 600 of the camera and on screen, after the boats. From a cruising plane they are specks; they read best on foot, aboard, or flying low. `placeBirds` has its own random stream (seeded from the world seed), so adding birds did not move the clouds.
+
 ## Wind
 
 One direction for the whole map, from the seed:
@@ -326,6 +367,8 @@ The plane has no dark outline. To keep thin parts (struts, wires, the fin edge) 
 
 Boats, the person, and the parts of whales above the water go through a small voxel rasterizer. `voxBegin(x, y, z, yaw, heel, pitch, g)` sets up the object's transform and screen box. `rasterVox` projects each voxel with the world camera, splats it as a square, and shades it from the sun with four tones per material (shadow, side, top, lit side). Sails are lit from both faces. `voxEnd` clears the object's scratch buffers. There is no dark rim around objects. Each object has its own depth buffer `akey`: squared distance to the eye in the perspective views, depth along the view in the flat ones. The world `zbuf` is read to hide voxels behind terrain. Only your own boat in first person also writes it (`yZW`). `drawBoats` sorts boats far to near, and `drawYacht` picks the level of detail from the screen scale (`m0 >= 9` finest, `>= 2.2` middle), or the extra-fine one for your boat in first person.
 
+`drawGardens` draws the statues, benches and urns the same way, after the sea life and before the boats. `drawBirds` follows the boats.
+
 `drawWalker` copies the `PERSON` voxels into the rig buffers with the legs and arms swung, then rasterizes them like a boat. It is skipped when `footView !== 0` or when `aboard >= 0`.
 
 Shared palettes (`yachtPal`, `lifePal`, `shutterLit`, `shutterShade`) are rebuilt in `rebuildPalettes`, so they follow the time of day and fog like the world.
@@ -338,7 +381,7 @@ Shared palettes (`yachtPal`, `lifePal`, `shutterLit`, `shutterShade`) are rebuil
 - `gameLog.enabled = false` silences it. `gameLog.level = 'warn'` keeps failures only.
 - `gameLog.child('foot')` is a scoped logger. The scene already uses `world`, `foot`, and `boat`.
 
-The world line lists islands, specks, docks, boats, fish, and whales. V logs where the person stood (`nearby`, `dock`, or `island`) or `nowhere to stand`. Boarding logs a boat, a missing boat, stepping ashore, or no shore.
+The world line lists islands, specks, docks, boats, fish, whales, gardens, viewpoints, props, wildflower cells, and birds. V logs where the person stood (`nearby`, `dock`, or `island`) or `nowhere to stand`. Boarding logs a boat, a missing boat, stepping ashore, or no shore.
 
 ## Easy to get wrong
 
@@ -354,4 +397,9 @@ The world line lists islands, specks, docks, boats, fish, and whales. V logs whe
 - The boat first-person camera and the walking first-person camera are different lenses. The walking one is long (the eye 26 behind the camera point), so anything of your own boat near the eye would sit in the middle of the picture as a cut-open hull. Keep the boat on its wide lens.
 - Trees are found with `isTree` / `isTrunk`, not by material range. Checking only 9–11 misses firs and round-crowned trees.
 - `drawWorld` must capture `Rp` and `mp` before it advances the depth step, or the shutter bands slide up and down the walls as the camera moves.
+- Garden materials are 43 and up, and `stampHouse` rejects any of them under a new yard. Gravel walks are 4–5 like the yard and the sand, so they are protected by `parkMap`, not by material. Keep every new layout marking `parkMap` and checking it.
+- Prop and bird colours are boat materials. Append them to `YACHT_COL` and give each a `YM_` constant; `yachtPal` follows `NYM`.
+- Anything new placed in `buildWorld` that draws random numbers should get its own `mulberry32` stream, as `placeBirds` does. Drawing from the shared one shifts everything after it, clouds included.
+- The flower bloom reads the pixel's world position inside its cell (`wx − gx`, `wy − gy`). Close up, depth steps are half a cell, so the bloom is about one step deep, and far away most samples miss it, so flowers thin out with distance.
+- `stampBelvedere` must measure the distance from the water before it stamps the terrace. The terrace fills in water cells, so measuring after would leave no band at its ends to start the promenade from.
 - A speck is marked from the cells counted in its own flood. Do not flood again after piers exist. A pier is land, so a second flood can walk off the speck onto a real island and then V finds nowhere to stand.

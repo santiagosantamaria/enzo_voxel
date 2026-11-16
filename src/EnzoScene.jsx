@@ -30,7 +30,7 @@ const FLY = {
   TouchBomb: 'bomb',
 }
 
-export default function FighterJetScene({ pixelSize = 0, showHint = true, touchControls = 'auto', ...rest }) {
+export default function EnzoScene({ pixelSize = 0, showHint = true, touchControls = 'auto', ...rest }) {
   const [noFire, setNoFire] = useState(false)
   const [fingerScreen, setFingerScreen] = useState(false)
   useEffect(() => {
@@ -393,7 +393,7 @@ export default function FighterJetScene({ pixelSize = 0, showHint = true, touchC
     >
       <canvas
         ref={canvasRef}
-        aria-label="Enzo: a pixel-art 1920s biplane, built from stacked slices, flying over islands. Space moves between the overhead view, the view from behind the plane and the open cockpit; arrow keys fly it, Shift opens the throttle and trails smoke, and B drops a bomb."
+        aria-label="Enzo's day: a pixel-art 1920s biplane, built from stacked slices, flying over islands. Space moves between the overhead view, the view from behind the plane and the open cockpit; arrow keys fly it, Shift opens the throttle and trails smoke, and B drops a bomb."
         role="img"
         className="absolute block"
         style={{ imageRendering: 'pixelated' }}
