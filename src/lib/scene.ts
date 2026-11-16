@@ -401,8 +401,8 @@ const YACHT_COL = [
   [232, 200, 120], [44, 40, 52],
   // garden statues (grey marble), fountain spray, benches (dark brown slats, dark iron), yellow flowers and leaves in the urns
   [196, 194, 188], [224, 240, 250], [88, 56, 34], [44, 46, 52], [248, 208, 60], [62, 122, 56],
-  // birds: gull white, gull wing grey, black wing tips, yellow bill; swallow back, belly, throat
-  [244, 244, 240], [168, 176, 186], [36, 36, 42], [238, 188, 60], [34, 44, 86], [236, 228, 208], [180, 80, 50],
+  // gulls: white, grey wings, black wing tips, yellow bill
+  [244, 244, 240], [168, 176, 186], [36, 36, 42], [238, 188, 60],
 ]
 const YM_FLUKE = 21
 const YM_WHALE = 23
@@ -424,9 +424,6 @@ const YM_GULL = 38
 const YM_GULL_WING = 39
 const YM_WING_TIP = 40
 const YM_BILL = 41
-const YM_SWALLOW = 42
-const YM_BELLY = 43
-const YM_THROAT = 44
 const NYM = YACHT_COL.length
 // fish and whales
 // 0 whale back · 1 flank · 2 lit · 3 scars · 4 flippers · 5 dark (rim, blowholes) · 6 spray
@@ -726,32 +723,19 @@ const PROPS = [
   }),
 ]
 
-// Birds, built like the props, with parts: 0 the body, 1 the left wing, 2 the right wing. The wings
-// beat about the shoulder (BIRD_SHOULDER across, at the wing's own height).
-// 0 gull: white, grey wings with black tips, a yellow bill, 4.5 across. Voxels of 0.25.
-// 1 swallow: dark blue back, cream belly, rusty throat, a forked tail, 3.2 across. Voxels of 0.2.
-const BIRD_G = [0.25, 0.2]
-const BIRD_SHOULDER = [0.25, 0.2]
-const BIRDS = [
-  propModel((box) => {
-    box(-0.25, 0.25, -1.0, 0.75, -0.25, 0.25, YM_GULL) // the body
-    box(-0.25, 0.25, 0.75, 1.25, 0, 0.5, YM_GULL) // the head
-    box(-0.125, 0.125, 1.25, 1.5, 0.125, 0.375, YM_BILL)
-    box(-0.25, 0.25, -1.5, -1.0, -0.125, 0.125, YM_GULL) // the tail
-    box(-2.25, -0.25, -0.5, 0.25, 0, 0.25, (i) => (i < 2 ? YM_WING_TIP : YM_GULL_WING), 1)
-    box(0.25, 2.25, -0.5, 0.25, 0, 0.25, (i) => (i > 5 ? YM_WING_TIP : YM_GULL_WING), 2)
-  }, BIRD_G[0]),
-  propModel((box) => {
-    box(-0.2, 0.2, -0.5, 0.5, -0.2, 0.2, (i, j, k) => (k === 0 ? YM_BELLY : YM_SWALLOW)) // the body
-    box(-0.2, 0.2, 0.5, 0.7, -0.2, 0.2, (i, j, k) => (k === 0 ? YM_THROAT : YM_SWALLOW)) // the head
-    box(-0.4, -0.2, -1.3, -0.5, 0, 0.2, YM_SWALLOW) // the forked tail
-    box(0.2, 0.4, -1.3, -0.5, 0, 0.2, YM_SWALLOW)
-    box(-1.6, -0.2, -0.2, 0.2, 0, 0.2, YM_SWALLOW, 1) // the wings, swept back at the tips
-    box(-1.6, -1.0, -0.6, -0.2, 0, 0.2, YM_SWALLOW, 1)
-    box(0.2, 1.6, -0.2, 0.2, 0, 0.2, YM_SWALLOW, 2)
-    box(1.0, 1.6, -0.6, -0.2, 0, 0.2, YM_SWALLOW, 2)
-  }, BIRD_G[1]),
-]
+// The gull, built like the props, with parts: 0 the body, 1 the left wing, 2 the right wing. The wings
+// beat about the shoulder (GULL_SHOULDER across, at the wing's own height). White, grey wings with
+// black tips, a yellow bill, 4.5 across. Voxels of 0.25.
+const GULL_G = 0.25
+const GULL_SHOULDER = 0.25
+const GULL = propModel((box) => {
+  box(-0.25, 0.25, -1.0, 0.75, -0.25, 0.25, YM_GULL) // the body
+  box(-0.25, 0.25, 0.75, 1.25, 0, 0.5, YM_GULL) // the head
+  box(-0.125, 0.125, 1.25, 1.5, 0.125, 0.375, YM_BILL)
+  box(-0.25, 0.25, -1.5, -1.0, -0.125, 0.125, YM_GULL) // the tail
+  box(-2.25, -0.25, -0.5, 0.25, 0, 0.25, (i) => (i < 2 ? YM_WING_TIP : YM_GULL_WING), 1)
+  box(0.25, 2.25, -0.5, 0.25, 0, 0.25, (i) => (i > 5 ? YM_WING_TIP : YM_GULL_WING), 2)
+}, GULL_G)
 
 function makeJet(x, y, z, yaw) {
   return {
@@ -962,9 +946,8 @@ export function createScene(initial) {
   const houses = []
   const props = [] // { kind, x, y, z, yaw, alive }: kind indexes PROPS; z is what it stands on
   const fountains = [] // { x, y, z, alive }: z is the top of the spout
-  // birds fly set paths about an anchor (ax, ay) at height az, worked out from the time each frame:
-  // a gull circles at radius r with angular speed w; a swallow loops on a Lissajous figure
-  // (rx, ry, w1, w2). ph and ph2 are phases.
+  // gulls fly set paths, worked out from the time each frame: each circles an anchor (ax, ay) at
+  // height az, at radius r with angular speed w and phase ph.
   const birds = []
   // what a cell is part of, so one layout never runs over another:
   // 1 a house and its yard · 2 a villa garden · 3 a lakeside terrace, promenade or path
@@ -2085,12 +2068,10 @@ export function createScene(initial) {
     }
   }
 
-  // Birds, few on the whole map. Gulls: 8 colonies of 2–4 over the water by a shore, the first near
-  // the start. Swallows: 6 flocks of 3–5 over the land beside a village, the first by the house
-  // nearest the start.
+  // Gulls, few on the whole map: 8 colonies of 2–4 over the water by a shore, the first near the start.
   function placeBirds(rnd) {
     birds.length = 0
-    const apart = (x, y, kind, d) => birds.every((b) => b.kind !== kind || wrapDelta(b.ax, x) ** 2 + wrapDelta(b.ay, y) ** 2 > d * d)
+    const apart = (x, y, d) => birds.every((b) => wrapDelta(b.ax, x) ** 2 + wrapDelta(b.ay, y) ** 2 > d * d)
     for (let c = 0; c < 8; c++) {
       let x = 0
       let y = 0
@@ -2104,7 +2085,7 @@ export function createScene(initial) {
         if (m < 1 || m > 3) continue
         let land = 0
         for (let a = 0; a < 8; a++) if (matAt(x + Math.cos(a * 0.785) * 22, y + Math.sin(a * 0.785) * 22) >= 4) land++
-        if (land < 1 || land > 5 || !apart(x, y, 0, 220)) continue
+        if (land < 1 || land > 5 || !apart(x, y, 220)) continue
         found = true
       }
       if (!found) continue
@@ -2112,55 +2093,10 @@ export function createScene(initial) {
       const dir = rnd() < 0.5 ? -1 : 1
       for (let i = 0; i < n; i++) {
         birds.push({
-          kind: 0, ax: wrapPos(x + (rnd() - 0.5) * 8), ay: wrapPos(y + (rnd() - 0.5) * 8), az: 10 + rnd() * 6,
+          ax: wrapPos(x + (rnd() - 0.5) * 8), ay: wrapPos(y + (rnd() - 0.5) * 8), az: 10 + rnd() * 6,
           r: 10 + rnd() * 8, w: dir * (0.35 + rnd() * 0.15), ph: rnd() * Math.PI * 2,
         })
       }
-    }
-    if (houses.length === 0) return
-    const order = houses.map((_, i) => i)
-    for (let i = order.length - 1; i > 0; i--) {
-      const j = (rnd() * (i + 1)) | 0
-      const t = order[i]
-      order[i] = order[j]
-      order[j] = t
-    }
-    let nearest = 0
-    for (let i = 1; i < houses.length; i++) {
-      if (wrapDelta(houses[i].x, spawnX) ** 2 + wrapDelta(houses[i].y, spawnY) ** 2 < wrapDelta(houses[nearest].x, spawnX) ** 2 + wrapDelta(houses[nearest].y, spawnY) ** 2) nearest = i
-    }
-    order.unshift(nearest)
-    let flocks = 0
-    for (const hi of order) {
-      if (flocks >= 6) break
-      const h = houses[hi]
-      const hx = h.x + (h.w >> 1)
-      const hy = h.y + (h.d >> 1)
-      let x = 0
-      let y = 0
-      let found = false
-      for (let t = 0; t < 8 && !found; t++) {
-        const ang = rnd() * Math.PI * 2
-        x = Math.round(hx + Math.cos(ang) * 22)
-        y = Math.round(hy + Math.sin(ang) * 22)
-        const m = matAt(x, y)
-        found = m >= 6 && m <= 8 && apart(x, y, 1, 160)
-      }
-      if (!found) continue
-      // clear of the houses and trees round about
-      let top = 0
-      for (let dy = -20; dy <= 20; dy += 2) {
-        for (let dx = -20; dx <= 20; dx += 2) top = Math.max(top, heightMap[(((y + dy) & NM) << NSHIFT) | ((x + dx) & NM)])
-      }
-      const n = 3 + ((rnd() * 3) | 0)
-      for (let i = 0; i < n; i++) {
-        const w1 = 0.9 + rnd() * 0.4
-        birds.push({
-          kind: 1, ax: wrapPos(x + (rnd() - 0.5) * 6), ay: wrapPos(y + (rnd() - 0.5) * 6), az: Math.min(top + 3 + rnd() * 3, CLOUD_ALT - 8),
-          rx: 9 + rnd() * 6, ry: 7 + rnd() * 6, w1, w2: w1 * (1.3 + rnd() * 0.4), ph: rnd() * Math.PI * 2, ph2: rnd() * Math.PI * 2,
-        })
-      }
-      flocks++
     }
   }
 
@@ -3568,7 +3504,9 @@ export function createScene(initial) {
     let R = Cy - m * (tn * v - A) + EPS
     for (let z = 0; z <= ZTOP; z++) rowNow[z] = Math.floor(R - m * z)
     const rowsK = S * (tn + q * A)
-    for (let guard = 0; v < vEnd && guard < 4000; guard++) {
+    // columns not yet drawn up to the top of the frame; when none are left, nothing more can show
+    let live = colHi - colLo
+    for (let guard = 0; v < vEnd && live > 0 && guard < 4000; guard++) {
       // one step deeper: about one screen row of sea, never coarser than a few pixels across
       let dv = (den * den) / rowsK
       const cap = (2.5 * den) / S
@@ -3598,11 +3536,19 @@ export function createScene(initial) {
       }
       const keep = 256 - fog
       const fine = inv < 1.8
+      // every cloud pixel at this depth lies between these rows (higher layers are higher up the
+      // screen), so a column already drawn up past cTop has no room left for cloud here
+      const cTop = rowNow[ZTOP - 1] < rowPrev[ZTOP - 1] ? rowNow[ZTOP - 1] : rowPrev[ZTOP - 1]
+      const cBot = rowNow[CLOUD_ALT] > rowPrev[CLOUD_ALT] ? rowNow[CLOUD_ALT] : rowPrev[CLOUD_ALT]
+      const cloudsHere = cloudsOn && cTop < rowHi && cBot > rowLo
       wx += ax * colLo
       wy += ay * colLo
       for (let px = colLo; px < colHi; px++, wx += ax, wy += ay) {
+        // a column drawn up to the top of the frame is finished
+        let cY = _cy[px]
+        if (cY <= rowLo) continue
         // clouds: a stack of up to CK layers floating at CLOUD_ALT
-        if (cloudsOn) {
+        if (cloudsHere && cTop < cY) {
           const cv = _cn[((((wy - cdy + NC) | 0) & NCM) << NCSHIFT) | (((wx - cdx + NC) | 0) & NCM)]
           if (cv !== 0 && cv >> 4 < rankMax) {
             const tk = cv & 15
@@ -3655,7 +3601,6 @@ export function createScene(initial) {
         const gy = wy | 0
         const idx = ((gy & NM) << NSHIFT) | (gx & NM)
         const h = _h[idx]
-        let cY = _cy[px]
         const yT = rowNow[h]
         let yR = rowPrev[h]
         if (yT >= cY && yR >= cY) continue
@@ -3736,6 +3681,7 @@ export function createScene(initial) {
           cY = yT
         }
         _cy[px] = cY
+        if (cY <= rowLo) live--
       }
     }
   }
@@ -4768,44 +4714,22 @@ export function createScene(initial) {
     }
   }
 
-  // the birds: each frame works out where each one is on its path, which way it heads, how it banks
-  // into the turn and how its wings beat. Gulls glide with the wings a little raised and flap now and
-  // then; swallows beat fast, with short glides.
+  // the gulls: each frame works out where each one is on its circle, which way it heads, and how its
+  // wings beat. They glide with the wings a little raised and flap now and then.
   function drawBirds() {
     if (birds.length === 0) return
     ensureAkey()
     const t = time
     for (const b of birds) {
-      let x
-      let y
-      let z
-      let dx
-      let dy
-      let heel
-      let flap
-      if (b.kind === 0) {
-        const th = b.w * t + b.ph
-        x = b.ax + Math.cos(th) * b.r
-        y = b.ay + Math.sin(th) * b.r
-        z = b.az + 1.2 * Math.sin(0.5 * t + b.ph)
-        dx = -Math.sin(th) * b.w
-        dy = Math.cos(th) * b.w
-        heel = b.w > 0 ? 0.3 : -0.3
-        flap = Math.sin(0.6 * t + b.ph * 3) > 0.35 ? 0.55 * Math.sin(6.5 * t + b.ph) : 0.12
-      } else {
-        const u = b.w1 * t + b.ph
-        const v = b.w2 * t + b.ph2
-        x = b.ax + b.rx * Math.sin(u)
-        y = b.ay + b.ry * Math.sin(v)
-        z = b.az + 1.5 * Math.sin(1.7 * t + b.ph)
-        dx = b.rx * b.w1 * Math.cos(u)
-        dy = b.ry * b.w2 * Math.cos(v)
-        const ax = -b.rx * b.w1 * b.w1 * Math.sin(u)
-        const ay = -b.ry * b.w2 * b.w2 * Math.sin(v)
-        // the sideways pull of the turn (positive to the right) sets the bank
-        heel = clamp((dx * ay - dy * ax) / ((Math.hypot(dx, dy) + 1e-6) * 25), -0.7, 0.7)
-        flap = Math.sin(1.3 * t + b.ph) > 0.5 ? -0.05 : 0.6 * Math.sin(16 * t + b.ph)
-      }
+      const th = b.w * t + b.ph
+      let x = b.ax + Math.cos(th) * b.r
+      let y = b.ay + Math.sin(th) * b.r
+      const z = b.az + 1.2 * Math.sin(0.5 * t + b.ph)
+      const dx = -Math.sin(th) * b.w
+      const dy = Math.cos(th) * b.w
+      // banked into the circle
+      const heel = b.w > 0 ? 0.3 : -0.3
+      const flap = Math.sin(0.6 * t + b.ph * 3) > 0.35 ? 0.55 * Math.sin(6.5 * t + b.ph) : 0.12
       x = x - N * Math.round((x - cam.x) / N)
       y = y - N * Math.round((y - cam.y) / N)
       if ((x - cam.x) ** 2 + (y - cam.y) ** 2 > 600 * 600) continue
@@ -4813,8 +4737,8 @@ export function createScene(initial) {
       const reach = prM * 3 + 2
       if (prX < -reach || prX > W + reach || prY < -reach || prY > H + reach) continue
       // the wings turn about the shoulder: up on both sides together
-      const M = BIRDS[b.kind]
-      const sh = BIRD_SHOULDER[b.kind]
+      const M = GULL
+      const sh = GULL_SHOULDER
       const cf = Math.cos(flap)
       const sf = Math.sin(flap)
       for (let i = 0; i < M.n; i++) {
@@ -4841,7 +4765,7 @@ export function createScene(initial) {
         rigNZ[i] = nz
         rigK[i] = M.K[i]
       }
-      voxBegin(x, y, z, Math.atan2(dx, -dy), heel, 0, BIRD_G[b.kind])
+      voxBegin(x, y, z, Math.atan2(dx, -dy), heel, 0, GULL_G)
       rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, M.n)
       voxEnd()
     }

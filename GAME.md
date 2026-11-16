@@ -45,6 +45,8 @@ The ground is a height map. Each cell is a stack of pixels: the side color fills
 
 Depth is a z-buffer of “how far along the view axis,” not a GPU buffer. A pixel that is already nearer is left alone.
 
+Everything is drawn on the CPU, so `drawWorld` is most of the frame (60–75%). It saves work without changing a pixel: a column drawn up to the top of the frame is skipped, the depth loop stops once every column is (`live`), and the cloud map is not read where every cloud row at that depth (`cTop` to `cBot`) is already drawn. A column is always filled solid from its `colY` down, which is what makes these skips safe.
+
 Projection, used everywhere (`project` and the jet slices):
 
 - `scale = vS / (1 + vQ * depth)`
@@ -311,12 +313,11 @@ Fish and whale bodies are flat shapes under the surface, drawn with `rasterFlat`
 
 ## Birds
 
-Two kinds, and few of them: about 45 on a map. `birds[]` holds each one's path, not its position. `drawBirds` works out where it is from `time`, so there is no step function and nothing to save.
+Gulls only, and few of them: about 20 on a map. `birds[]` holds each one's path, not its position. `drawBirds` works out where it is from `time`, so there is no step function and nothing to save.
 
-- **Gulls** (kind 0): 8 colonies of 2 to 4, over shallow water (material 1–3) with land on 1 to 5 of 8 rays 22 out, so by a shore but not in a cove. Colonies are at least 220 apart, and the first is 60 to 260 from the spawn. Each gull circles its point at radius 10–18, at 10–16 up with a slow rise and fall, the whole colony turning the same way. It banks 0.3 into the circle and glides with the wings a little raised, flapping for a while now and then. White body, grey wings with black tips, yellow bill.
-- **Swallows** (kind 1): 6 flocks of 3 to 5, over grass (material 6–8) 22 from a house, flocks at least 160 apart. Houses are tried in random order after the one nearest the spawn. A swallow flies a Lissajous loop (9–15 by 7–13, the two rates 1.3 to 1.7 apart) a few cells above the highest roof or tree within 20, and below the clouds. It banks with the sideways pull of its turn, up to 0.7, and beats its wings fast with short glides. Dark blue back and forked tail, pale belly, rust throat.
+8 colonies of 2 to 4, over shallow water (material 1–3) with land on 1 to 5 of 8 rays 22 out, so by a shore but not in a cove. Colonies are at least 220 apart, and the first is 60 to 260 from the spawn. Each gull circles its point at radius 10–18, at 10–16 up with a slow rise and fall, the whole colony turning the same way. It banks 0.3 into the circle and glides with the wings a little raised, flapping for a while now and then. White body, grey wings with black tips, yellow bill.
 
-The models are `BIRDS`, built with `propModel` at `BIRD_G` (0.25 and 0.2). The wing voxels are tagged part 1 (left) and 2 (right), and `drawBirds` turns them about the shoulder (`BIRD_SHOULDER`) by the flap angle, both sides up together, normals included. Birds are drawn within 600 of the camera and on screen, after the boats. From a cruising plane they are specks; they read best on foot, aboard, or flying low. `placeBirds` has its own random stream (seeded from the world seed), so adding birds did not move the clouds.
+The model is `GULL`, built with `propModel` at `GULL_G` (0.25). The wing voxels are tagged part 1 (left) and 2 (right), and `drawBirds` turns them about the shoulder (`GULL_SHOULDER`) by the flap angle, both sides up together, normals included. Gulls are drawn within 600 of the camera and on screen, after the boats. From a cruising plane they are specks; they read best on foot, aboard, or flying low. `placeBirds` has its own random stream (seeded from the world seed), so adding birds did not move the clouds.
 
 ## Wind
 
