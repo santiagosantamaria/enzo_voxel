@@ -356,24 +356,27 @@ const flowerAt = (r) => M_FLOWERS[r < 0.5 ? 1 : 2]
 // cabin: [aft, fore, height] of the deckhouse · cockpit: [aft, fore] · sprit: bowsprit length
 // masts: f position, h top, boom length, and for a gaff sail the throat height and gaff length
 // jibs: tack on the bowsprit end or on the stem, head height on the foremost mast
+// seat: where the forehatch is, a little forward of the foremast; Enzo comes up through it and
+//       sits on the rail beside it when the boat lies still (clear of the shrouds, and of every
+//       boom, which all swing aft of their masts)
 const YACHTS = [
   // gaff sloop: one mast well forward, a gaff main on a long boom, a jib out to a short bowsprit
   {
-    L: 9, B: 2.8, free: 1.1, sheer: 0.34, transom: 0.5,
+    L: 9, B: 2.8, free: 1.1, sheer: 0.34, transom: 0.5, seat: 2.5,
     cabin: [-0.5, 1.9, 0.5], cockpit: [-3.4, -1.1], sprit: 1.6,
     masts: [{ f: 1.6, h: 9.6, boom: 5.6, throat: 6.8, gaff: 3.6, top: false }],
     jibs: [{ sprit: true, head: 8.4 }],
   },
   // ketch: a tall main and a short mizzen, both triangular, and a big jib
   {
-    L: 12, B: 3.1, free: 1.2, sheer: 0.4, transom: 0.42,
+    L: 12, B: 3.1, free: 1.2, sheer: 0.4, transom: 0.42, seat: 3.4,
     cabin: [-2.3, 2.9, 0.55], cockpit: [-4.5, -2.7], sprit: 0.9,
     masts: [{ f: 2.3, h: 12.8, boom: 5.0, throat: 0, gaff: 0, top: false }, { f: -3.7, h: 8.4, boom: 2.7, throat: 0, gaff: 0, top: false }],
     jibs: [{ sprit: true, head: 11.4 }],
   },
   // three-masted schooner: gaff sails with topsails over them, two jibs out to a long bowsprit
   {
-    L: 15, B: 3.6, free: 1.35, sheer: 0.5, transom: 0.4,
+    L: 15, B: 3.6, free: 1.35, sheer: 0.5, transom: 0.4, seat: 5.0,
     cabin: [-1.7, 1.5, 0.5], cockpit: [-6.2, -4.8], sprit: 3.6,
     masts: [
       { f: 4.1, h: 12.0, boom: 3.2, throat: 8.0, gaff: 2.7, top: true },
@@ -519,7 +522,10 @@ function buildYacht(y, g) {
         let k
         if (up) {
           const tz = top(a, f)
+          const hA = Math.abs(a)
+          const hF = Math.abs(f - y.seat)
           if (tz < deck - 0.1) k = 9
+          else if (hA < 0.35 && hF < 0.35) k = hA < 0.2 && hF < 0.2 ? 8 : 3 // the forehatch, open: dark, in a varnished frame
           else if (outer) k = 3
           else k = fine && (Math.floor((a + 8) / 0.5) & 1) ? 5 : 4
           add(a, f, z, k, na * 0.3, nf * 0.3, 1)
@@ -586,7 +592,17 @@ function makeBoat(x, y, yaw, kind, hull, moored, speed, phase) {
 // Legs swing about the hip, arms about the shoulder.
 const PERSON_G = 0.25
 const PERSON_HIP = 2
+const PERSON_KNEE = 1
 const PERSON_SHOULDER = 3.6
+// Enzo out on the deck of the boat you are in (drawEnzoOut): the same model at one size on every
+// boat, about 2.9 tall, a touch over life size against the hulls so he shows from the air
+const LOUNGE_SCALE = 0.52
+const LOUNGE_WAIT = 15 // seconds lying still, with no key down, before he comes up
+const LOUNGE_RISE = 1 // up the ladder and out of the forehatch
+const LOUNGE_WALK = 0.8 // out to the rail
+const LOUNGE_SIT = 0.9 // down onto it, legs over the side
+const LOUNGE_END = LOUNGE_RISE + LOUNGE_WALK + LOUNGE_SIT
+const LOUNGE_BACK = 1.6 // going back in plays this much faster
 const PERSON = (() => {
   const g = PERSON_G
   const A = [], F = [], Z = [], NA = [], NF = [], NZ = [], K = [], P = []
@@ -1562,6 +1578,7 @@ export function createScene(initial) {
     bigIsle.length = 0
     speckN = 0
     aboard = -1
+    loungeReset()
     smallIsle.fill(0)
     windYaw = ((p.seed * 2.399) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)
     const sea = new Uint8Array(N * N)
@@ -2277,6 +2294,14 @@ export function createScene(initial) {
   let walkTurn = 0
   let walkMove = 0
   let sailing = false
+  // Enzo out on deck: seconds the boat has lain still, how far along the way out he is
+  // (0 below … LOUNGE_END sat on the rail), which way he is going (1 out, -1 back in, 0 not out),
+  // the side he sits on (1 starboard, -1 port), and whether W was pressed while he was out
+  let restT = 0
+  let lounge = 0
+  let loungeDir = 0
+  let loungeSide = 1
+  let loungeGo = false
   let bombHeld = false
   let bombReady = 0
   const boom = new Float32Array(BOOM_N * BOOM_F)
@@ -2798,6 +2823,7 @@ export function createScene(initial) {
       walkTurn = 0
       walkMove = 0
       sailing = false
+      loungeReset()
       footLog.info('back to the jet')
       return false
     }
@@ -2873,6 +2899,7 @@ export function createScene(initial) {
       walker.z = walkFloor(land.x, land.y)
       aboard = -1
       sailing = false
+      loungeReset()
       boatLog.info('ashore')
       return true
     }
@@ -2891,6 +2918,7 @@ export function createScene(initial) {
     }
     aboard = best
     sailing = false
+    loungeReset()
     boats[best].moored = true
     boatLog.info('boarded', { boat: best, moored: true })
     walker.x = boats[best].x
@@ -2898,14 +2926,60 @@ export function createScene(initial) {
     walker.yaw = boats[best].yaw
     return true
   }
+  function castOff(b) {
+    sailing = true
+    b.moored = false
+    b.leg = 0
+    b.berth = -1
+    b.stuck = 0
+  }
+  function loungeReset() {
+    restT = 0
+    lounge = 0
+    loungeDir = 0
+    loungeGo = false
+  }
+  /**
+   * Enzo out on deck. After LOUNGE_WAIT seconds lying still in the overhead view with no key
+   * down, he comes up through the forehatch and sits on the rail on the side facing the camera.
+   * W, A or D send him back down first; a W pressed meanwhile casts off once he is in. Returns
+   * true while he is out, when the boat must hold still.
+   */
+  function loungeStep(b, dt) {
+    if (loungeDir === 0) {
+      const still = !sailing && footView === 0 && walkMove === 0 && walkTurn === 0
+      restT = still ? restT + dt : 0
+      if (restT < LOUNGE_WAIT) return false
+      loungeReset()
+      loungeDir = 1
+      // across +1 faces the camera when sin(yaw + its yaw) > 0 (see the sail lighting in rasterVox)
+      loungeSide = Math.sin(b.yaw + BOAT_ISO_YAW) >= 0 ? 1 : -1
+      boatLog.info('Enzo comes up on deck', { side: loungeSide > 0 ? 'starboard' : 'port' })
+    }
+    // in first person the eye is his, back in the cockpit
+    if (footView !== 0) {
+      loungeReset()
+      return false
+    }
+    if (walkMove > 0) loungeGo = true
+    if (loungeDir > 0 && (walkMove > 0 || walkTurn !== 0)) loungeDir = -1
+    lounge = Math.min(LOUNGE_END, lounge + loungeDir * dt * (loungeDir < 0 ? LOUNGE_BACK : 1))
+    if (lounge > 0) return true
+    const go = loungeGo
+    loungeReset()
+    if (go) castOff(b)
+    return false
+  }
   function stepFoot(dt) {
     if (!onFoot) return
     if (aboard >= 0) {
       const b = boats[aboard]
       if (!b) { aboard = -1; return }
-      b.yaw += walkTurn * 1.15 * dt
-      if (walkMove < 0) sailing = false
-      if (walkMove > 0) { sailing = true; b.moored = false; b.leg = 0; b.berth = -1; b.stuck = 0 }
+      if (!loungeStep(b, dt)) {
+        b.yaw += walkTurn * 1.15 * dt
+        if (walkMove < 0) sailing = false
+        if (walkMove > 0) castOff(b)
+      }
       if (sailing) {
         const spd = 12 * (1 + 0.42 * windAlong(b.yaw))
         const nx = b.x + Math.sin(b.yaw) * spd * dt
@@ -4955,7 +5029,149 @@ export function createScene(initial) {
       yFadeR = 1 - 0.6 * rigGhost
     }
     rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, rigN)
+    // Enzo, out on deck: drawn with the boat, so the hull and the rig hide him where they should
+    if (own && !firstPerson && lounge > 0) drawEnzoOut(Y)
     voxEnd()
+  }
+
+  /**
+   * Enzo on the deck of the boat you are in, at lounge seconds along the way out: up the ladder
+   * through the forehatch (nothing of him below the deck), out across the deck to the rail, then
+   * down onto it facing out, his legs over the side, leaning back on one hand with the other on
+   * his knee, his shins swinging. Going back in plays it backwards, but he turns to walk to the
+   * hatch face first. PERSON, posed, scaled and turned into boat units.
+   */
+  function drawEnzoOut(Y) {
+    const t = lounge
+    const side = loungeSide
+    const sc = LOUNGE_SCALE
+    const ease = (u) => u * u * (3 - 2 * u)
+    const fs = Y.seat
+    const deck = yachtDeck(Y, fs)
+    const rail = yachtHalf(Y, fs, deck)
+    const standA = rail - 0.5
+    const hipA = rail - 0.15
+    // the thighs rest on the deck edge, just over the toe-rail
+    const seatZ = deck + 0.2
+    let at = 0 // how far out from the middle of the deck
+    let base = deck // where his feet are, standing
+    let clipZ = -1e9
+    let psi = side > 0 ? 0 : Math.PI // which way he faces: 0 starboard, π port
+    let hip1 = 0, hip2 = 0, knee1 = 0, knee2 = 0, arm1 = 0, arm2 = 0, lean = 0
+    if (t < LOUNGE_RISE) {
+      // three rungs, a step each, his arms reaching up in turn for the hatch rim
+      const e = (t / LOUNGE_RISE) * 3
+      const rung = Math.min(3, Math.floor(e) + ease(e - Math.floor(e)))
+      base = deck - (1 - rung / 3) * 5.6 * sc
+      clipZ = deck - 0.03
+      const w = Math.sin(e * Math.PI)
+      arm1 = 0.6 + 0.4 * w
+      arm2 = 0.6 - 0.4 * w
+      hip1 = 0.5 * Math.max(0, w)
+      hip2 = 0.5 * Math.max(0, -w)
+      knee1 = 2 * hip1
+      knee2 = 2 * hip2
+      if (loungeDir < 0) psi += Math.PI
+    } else if (t < LOUNGE_RISE + LOUNGE_WALK) {
+      const u = (t - LOUNGE_RISE) / LOUNGE_WALK
+      at = standA * u
+      const stride = Math.sin(u * Math.PI * 3)
+      hip1 = 0.45 * stride
+      hip2 = -hip1
+      arm1 = -0.4 * stride
+      arm2 = -arm1
+      base = deck + Math.abs(Math.cos(u * Math.PI * 3)) * 0.04
+      // on the way back he turns to face the hatch as he sets off
+      if (loungeDir < 0) psi += Math.PI * clamp((LOUNGE_RISE + LOUNGE_WALK - t) / 0.3, 0, 1)
+    } else {
+      const k = clamp((t - LOUNGE_RISE - LOUNGE_WALK) / LOUNGE_SIT, 0, 1)
+      const kLeg = ease(Math.min(1, k * 1.4)) // the legs come up over the rail ahead of the drop
+      const kDrop = ease(k) ** 1.6
+      at = standA + (hipA - standA) * ease(k)
+      // sat, the hip is LOUNGE_SCALE·(hip − thigh's underside) over the seat
+      base = deck + (seatZ - (PERSON_HIP - 0.25) * sc - deck) * kDrop
+      hip1 = hip2 = 1.38 * kLeg
+      // the shins hang straight down (knee bend = thigh angle), swinging a little, one then the other
+      const sway = 0.22 * k * Math.sin(time * 1.7)
+      knee1 = hip1 - sway
+      knee2 = hip2 + sway
+      lean = 0.18 * ease(k)
+      arm1 = -0.3 * ease(k) // a hand on the deck behind him
+      arm2 = 0.35 * ease(k) // the other on his knee
+    }
+    const P = PERSON
+    const cp = Math.cos(psi)
+    const sp = Math.sin(psi)
+    const cl = Math.cos(lean)
+    const sl = Math.sin(lean)
+    const x0 = side * at
+    let n = 0
+    for (let v = 0; v < P.n; v++) {
+      const part = P.P[v]
+      let f = P.F[v]
+      let z = P.Z[v]
+      let nf = P.NF[v]
+      let nz = P.NZ[v]
+      if (part === 1 || part === 2) {
+        // the thigh turns about the hip; below the knee, the shin turns back by the knee bend
+        const th = part === 1 ? hip1 : hip2
+        let ang = th
+        let pf = 0
+        let pz = PERSON_HIP
+        let dz = z - PERSON_HIP
+        if (z < PERSON_KNEE) {
+          const thigh = PERSON_HIP - PERSON_KNEE
+          pf = Math.sin(th) * thigh
+          pz = PERSON_HIP - Math.cos(th) * thigh
+          ang = th - (part === 1 ? knee1 : knee2)
+          dz = z - PERSON_KNEE
+        }
+        const c = Math.cos(ang)
+        const s = Math.sin(ang)
+        f = pf + P.F[v] * c - dz * s
+        z = pz + P.F[v] * s + dz * c
+        nf = P.NF[v] * c - P.NZ[v] * s
+        nz = P.NF[v] * s + P.NZ[v] * c
+      } else if (part >= 3) {
+        const s0 = part === 3 ? arm1 : arm2
+        const c = Math.cos(s0)
+        const s = Math.sin(s0)
+        const dz = z - PERSON_SHOULDER
+        f = P.F[v] * c - dz * s
+        z = PERSON_SHOULDER + P.F[v] * s + dz * c
+        nf = P.NF[v] * c - P.NZ[v] * s
+        nz = P.NF[v] * s + P.NZ[v] * c
+      }
+      if (lean !== 0 && part !== 1 && part !== 2) {
+        // the body and arms lean back about the hip
+        const dz = z - PERSON_HIP
+        const f1 = f * cl - dz * sl
+        z = PERSON_HIP + f * sl + dz * cl
+        f = f1
+        const nf1 = nf * cl - nz * sl
+        nz = nf * sl + nz * cl
+        nf = nf1
+      }
+      const bz = base + z * sc
+      if (bz < clipZ) continue
+      const a = P.A[v]
+      rigA[n] = x0 + sc * (f * cp + a * sp)
+      rigF[n] = fs + sc * (f * sp - a * cp)
+      rigZ[n] = bz
+      rigNA[n] = nf * cp + P.NA[v] * sp
+      rigNF[n] = nf * sp - P.NA[v] * cp
+      rigNZ[n] = nz
+      rigK[n] = P.K[v]
+      n++
+    }
+    voxGrain(PERSON_G * sc)
+    rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, n)
+  }
+
+  /** the size each voxel splats to on screen, for voxels of size g in the object set up by voxBegin */
+  function voxGrain(g) {
+    yHX = 0.5 * g * (Math.abs(yAU) + Math.abs(yFU)) + 0.02
+    yHY = 0.5 * g * (vTan * (Math.abs(yAV) + Math.abs(yFV)) + 1) + 0.02
   }
 
   /** set up the view of one voxel object at (x, y, z) turned to yaw, heeled and pitched, voxels of size g */
@@ -4973,8 +5189,7 @@ export function createScene(initial) {
     yAV = -(cs * s + sn * c)
     yFU = sn * c + cs * s
     yFV = -(sn * s - cs * c)
-    yHX = 0.5 * g * (Math.abs(yAU) + Math.abs(yFU)) + 0.02
-    yHY = 0.5 * g * (vTan * (Math.abs(yAV) + Math.abs(yFV)) + 1) + 0.02
+    voxGrain(g)
     yCH = Math.cos(heel)
     ySH = Math.sin(heel)
     yCP = Math.cos(pitch)

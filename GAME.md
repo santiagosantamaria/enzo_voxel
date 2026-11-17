@@ -99,9 +99,9 @@ Click (pointer down and up in under 0.2s) barrel-rolls the plane. Holding the po
 
 | Key | Flying | On foot, walking | On foot, in a boat |
 | --- | --- | --- | --- |
-| W / Up | Dive | Walk forward | Start sailing. Stays on after release. |
+| W / Up | Dive | Walk forward | Start sailing. Stays on after release. If Enzo is out on deck, he climbs back in first. |
 | S / Down | Climb | Walk back | Stop. Stays stopped. |
-| A / Left, D / Right | Turn | Turn | Turn, sailing or not |
+| A / Left, D / Right | Turn | Turn | Turn, sailing or not. If Enzo is out on deck, he climbs back in first. |
 | Shift | Throttle and smoke | — | — |
 | B or F | Drop bombs while held | — | — |
 | V | Become the person | Back to the jet | Back to the jet. The boat stays as it is. |
@@ -315,7 +315,16 @@ speed = 12 * (1 + 0.42 * windAlong(yaw))
 
 That is about 7 straight into the wind and about 17 with the wind. The next step must be water or the boat stays put until it is turned. E ashore needs standable land within 28 and clears `sailing`.
 
-Overhead while aboard is not the close walking camera. It is isometric: no perspective (`vQ = 0`, `vC = 0`, `vK = 0`), `vS = 4`, camera on the boat at sea level, looking down at about 32° (`vTan = BOAT_ISO_TAN`, 0.62: height to depth on screen is 1 : vTan) from a fixed diagonal (`vYaw = BOAT_ISO_YAW`, π/4). The world does not turn with the boat: map cells stay diamonds and the boat turns on the screen. At that shallow angle a cloud would sit over the boat, so `drawWorld` opens a round hole in the clouds around it (`holeR`, 27 × `vS`, its outer 40% dithered with `BAYER4` so it reads as thinning cloud). Cloud shadows on the water stay. The person is not drawn in that view. The blue pennant marks the boat you are in. The figure is not drawn in first person either, because `drawWalker` only runs for the walking overhead.
+**Enzo out on deck.** After `LOUNGE_WAIT` (15) seconds stopped in the overhead view with no key down (`restT`), Enzo comes up through the forehatch, walks out to the rail and sits on it, facing out with his legs hanging over the side. He leans back on one hand, rests the other on his knee, and his shins swing. `loungeStep` runs it and `drawEnzoOut` draws it.
+
+- **Where he sits.** Each yacht has a `seat` (sloop 2.5, ketch 3.4, schooner 5.0). That is where its forehatch is, a little forward of the foremast, clear of the shrouds and of every boom, since booms swing aft. `buildYacht` paints the hatch there: dark (8) in a varnished frame (3).
+- **Which side.** He picks the side that faces the camera when he starts: across +1 faces it when `sin(yaw + BOAT_ISO_YAW) > 0`. If the boat points at the camera, both sides are edge-on and either will do.
+- **Size.** He is `PERSON` scaled by `LOUNGE_SCALE` (0.52), so about 2.9 tall, the same on every boat. That is a little over life size against the hulls, so he shows from the air. His voxels go into the rig buffers after the rig and are drawn inside the boat's own `voxBegin` … `voxEnd`. The hull and rig hide him where they should, and he heels and bobs with the boat. `voxGrain` sets the smaller splat size.
+- **Pose.** It is built from the walking parts plus a knee (`PERSON_KNEE`). Each leg turns at the hip, and below the knee the shin turns back by the knee bend. The upper body leans back about the hip. While he climbs the ladder, nothing of him below the deck is drawn.
+- **Timeline.** `lounge` runs from 0 to `LOUNGE_END`: `LOUNGE_RISE` 1s up the ladder, `LOUNGE_WALK` 0.8s to the rail, `LOUNGE_SIT` 0.9s down onto it. `loungeDir` is 1 going out and -1 going back in.
+- **Going back in.** W, A or D sends him back. That plays the same timeline backwards, `LOUNGE_BACK` (1.6×) faster, and he turns to walk to the hatch face first. While he is out the boat holds still and does not turn. A W pressed meanwhile casts off as soon as he is down. Switching to first person puts him straight back in his seat, and so do V, E, and a world rebuild (`loungeReset`).
+
+Overhead while aboard is not the close walking camera. It is isometric: no perspective (`vQ = 0`, `vC = 0`, `vK = 0`), `vS = 4`, camera on the boat at sea level, looking down at about 32° (`vTan = BOAT_ISO_TAN`, 0.62: height to depth on screen is 1 : vTan) from a fixed diagonal (`vYaw = BOAT_ISO_YAW`, π/4). The world does not turn with the boat: map cells stay diamonds and the boat turns on the screen. At that shallow angle a cloud would sit over the boat, so `drawWorld` opens a round hole in the clouds around it (`holeR`, 27 × `vS`, its outer 40% dithered with `BAYER4` so it reads as thinning cloud). Cloud shadows on the water stay. The person is not drawn in that view while sailing, only once he comes out on deck. The blue pennant marks the boat you are in. The figure is not drawn in first person, because `drawWalker` only runs for the walking overhead.
 
 First person aboard (Space) is a seat at the forward end of the cockpit (`yachtEyeF`: cockpit end minus 0.3), `YACHT_EYE` (2.4) over the deck, rising and falling with the boat's own bob. It does not use the walking camera's long lens. Like the plane's cockpit, it is a true wide lens: the camera point is `BOAT_LOOK` (4) ahead of the eye, `vQ = 1 / BOAT_LOOK`, focal length `0.45 * max(W, H)`, no look-down, horizon at `0.34 H`. The boat you sit in then fills the bottom of the picture as it would: the cabin top and varnished trim close below, the mast and stays ahead, the sail on the leeward side with its seams, the foredeck and bow beyond. Everything of your own boat more than 0.5 behind the eye is cut (`yCut`), and so is the wake behind it. Your boat also writes `zbuf` in this view (`yZW`), so the plane does not show through the sail.
 
@@ -398,7 +407,7 @@ Boats, the person, and the parts of whales above the water go through a small vo
 
 `drawGardens` draws the statues, benches and urns the same way, after the sea life and before the boats. `drawBirds` follows the boats.
 
-`drawWalker` copies the `PERSON` voxels into the rig buffers with the legs and arms swung, then rasterizes them like a boat. It is skipped when `footView !== 0` or when `aboard >= 0`.
+`drawWalker` copies the `PERSON` voxels into the rig buffers with the legs and arms swung, then rasterizes them like a boat. It is skipped when `footView !== 0` or when `aboard >= 0`. Aboard, `drawEnzoOut` poses him into the same buffers from inside `drawYacht` instead (see "Enzo out on deck").
 
 Shared palettes (`yachtPal`, `lifePal`, `shutterLit`, `shutterShade`) are rebuilt in `rebuildPalettes`, so they follow the time of day and fog like the world.
 
@@ -419,7 +428,8 @@ The world line lists islands, specks, docks, boats, fish, whales, gardens, viewp
 - `floorMap` has to be copied before forests. If walking uses `heightMap` in the trees, the person stands on the leaves. If leaves stay in `standable`’s block list, the person cannot pass between trunks.
 - Dock normals have to come from the ocean mask. A cardinal step looks diagonal to a diagonal beach, and a lake will accept a “deep water” test that only looks a few cells out.
 - Overhead cameras with `vC` or `vK` above 0 draw the sky volume. The walking camera must stay under `CLOUD_ALT` or the view fills with cloud. The boat aerial view stays orthographic (`vQ`, `vC`, and `vK` all 0) so it does not enter that volume. Its look-down is only `vTan`, and only the cloud hole keeps clouds off the boat.
-- A moored boat must be skipped in `stepBoats`. Clearing `moored` on W is what casts off. S stops by clearing `sailing` only.
+- A moored boat must be skipped in `stepBoats`. Clearing `moored` on W is what casts off (`castOff`). S stops by clearing `sailing` only.
+- Enzo out on deck is drawn from the rig buffers after the rig has been rasterized, so `drawEnzoOut` must come after the rig's `rasterVox` in `drawYacht`. Anything new that resets or leaves the boat you are in should call `loungeReset`, or he can come back sitting on a different boat. A new yacht needs a `seat` clear of its shrouds and booms, on a part of the deck wide enough for the walk out (`yachtHalf` there minus 0.5).
 - World rebuild resets `aboard` inside `placeDocks` and reseats the walker if they were on foot. The reseat also skips specks.
 - New wall or roof materials have to be added to `isBuilt`, and windowed walls to `WINDOWED` (which feeds `WINDOW_MAT`). Otherwise the person walks on roofs, bombs leave walls standing, or shutters do not show.
 - Boats do not write `zbuf`, except your own in first person. Otherwise the jet is drawn after them and lands on top, even when behind a sail.
