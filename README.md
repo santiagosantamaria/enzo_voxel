@@ -6,6 +6,18 @@
 
 Everything is drawn by a small software renderer in the browser, with no 3D engine. The ground and clouds are drawn on the graphics card (WebGL2) when the browser allows it, and on the CPU otherwise.
 
+## Screenshots
+
+| On foot | |
+| --- | --- |
+| ![Walking through a villa garden, seen from above](docs/walk_camera_up.png) | ![Walking along the lakeside in first person](docs/walk_camera_first_person.png) |
+| Overhead | First person |
+
+| In a boat | |
+| --- | --- |
+| ![A sailboat between the islands, isometric view](docs/boat_camera_iso.png) | ![Sailing in first person from the bow](docs/boat_camera_sail.png) |
+| Isometric | First person |
+
 ## Run
 
 ```
