@@ -575,6 +575,8 @@ function makeBoat(x, y, yaw, kind, hull, moored, speed, phase) {
   return {
     x, y, yaw, kind, hull, speed, phase, turn: 0, moored,
     v: 0, sail: moored ? 0 : 1, boom: 0, heel: 0,
+    // intent 0 keeps sailing, 1 ties up at a dock and stays, 2 drops sail off a shore and stays
+    intent: 0, berth: -1, avoid: 0, avoidT: 0, leg: 0, seek: 0, stuck: 0,
   }
 }
 
@@ -2038,7 +2040,9 @@ export function createScene(initial) {
   }
 
   function placeBoats(rnd) {
-    const freeGoal = boats.length + 8
+    const docked = boats.length
+    const freeGoal = docked + 8
+    let freeN = 0
     const tryBoat = (x, y) => {
       if (boats.length >= freeGoal) return false
       if (matAt(x, y) > 2) return false
@@ -2064,7 +2068,11 @@ export function createScene(initial) {
       const yaw = Math.atan2(-nx, ny) + (rnd() > 0.5 ? 0 : Math.PI)
       const r = rnd()
       const kind = r < 0.35 ? 0 : r < 0.7 ? 1 : 2
-      boats.push(makeBoat(x, y, yaw, kind, HULL_PICK[(rnd() * HULL_PICK.length) | 0], false, 5.2 + rnd() * 3.4, rnd() * Math.PI * 2))
+      const boat = makeBoat(x, y, yaw, kind, HULL_PICK[(rnd() * HULL_PICK.length) | 0], false, 5.2 + rnd() * 3.4, rnd() * Math.PI * 2)
+      // four keep sailing, two make for a dock, two anchor off a beach
+      boat.intent = freeN === 1 || freeN === 4 ? 1 : freeN === 3 || freeN === 6 ? 2 : 0
+      freeN++
+      boats.push(boat)
       return true
     }
     for (let k = 0; k < 20 && boats.length < freeGoal && boats.length < docks.length + 4; k++) {
@@ -2897,7 +2905,7 @@ export function createScene(initial) {
       if (!b) { aboard = -1; return }
       b.yaw += walkTurn * 1.15 * dt
       if (walkMove < 0) sailing = false
-      if (walkMove > 0) { sailing = true; b.moored = false }
+      if (walkMove > 0) { sailing = true; b.moored = false; b.leg = 0; b.berth = -1; b.stuck = 0 }
       if (sailing) {
         const spd = 12 * (1 + 0.42 * windAlong(b.yaw))
         const nx = b.x + Math.sin(b.yaw) * spd * dt
@@ -2930,31 +2938,281 @@ export function createScene(initial) {
     walker.z = walkFloor(walker.x, walker.y)
   }
 
+  // How far the water runs from (x, y) along a heading, checking the bow line and, close in, the beam.
+  function seaClear(x, y, yaw, dist) {
+    const sn = Math.sin(yaw)
+    const cs = Math.cos(yaw)
+    const rx = cs
+    const ry = sn
+    for (let d = 4; d <= dist; d += 4) {
+      const fx = x + sn * d
+      const fy = y - cs * d
+      if (matAt(fx, fy) >= 4) return d - 4
+      if (d <= 20) {
+        if (matAt(fx + rx * 3.5, fy + ry * 3.5) >= 4) return d - 4
+        if (matAt(fx - rx * 3.5, fy - ry * 3.5) >= 4) return d - 4
+      }
+    }
+    return dist
+  }
+
+  function landNear(x, y, max) {
+    let best = max + 1
+    let bx = 0
+    let by = 0
+    for (let a = 0; a < 8; a++) {
+      const ang = a * 0.785398
+      const sx = Math.cos(ang)
+      const sy = Math.sin(ang)
+      for (let d = 8; d <= max; d += 8) {
+        if (matAt(x + sx * d, y + sy * d) >= 4) {
+          if (d < best) { best = d; bx = sx; by = sy }
+          break
+        }
+      }
+    }
+    return { d: best, x: bx, y: by }
+  }
+
+  // Just seaward of the sloop already at the pier, so a second boat can tie up without sitting on it.
+  function offDock(dock, dist) {
+    return {
+      x: wrapPos(dock.bx + Math.sin(dock.yaw) * dist),
+      y: wrapPos(dock.by - Math.cos(dock.yaw) * dist),
+    }
+  }
+
+  function spotTaken(x, y, self) {
+    for (let k = 0; k < boats.length; k++) {
+      const o = boats[k]
+      if (o === self) continue
+      const dx = wrapDelta(o.x, x)
+      const dy = wrapDelta(o.y, y)
+      if (dx * dx + dy * dy < 14 * 14) return true
+    }
+    return false
+  }
+
+  function spotOk(b) {
+    if (b.berth < 0 || b.berth >= docks.length) return false
+    const spot = offDock(docks[b.berth], 24)
+    return matAt(spot.x, spot.y) < 4 && !spotTaken(spot.x, spot.y, b)
+  }
+
+  function pickBerth(b) {
+    let best = -1
+    let bestD = 700 * 700
+    for (let i = 0; i < docks.length; i++) {
+      const spot = offDock(docks[i], 24)
+      if (matAt(spot.x, spot.y) >= 4) continue
+      if (seaClear(spot.x, spot.y, docks[i].yaw, 16) < 10) continue
+      if (spotTaken(spot.x, spot.y, b)) continue
+      const dx = wrapDelta(spot.x, b.x)
+      const dy = wrapDelta(spot.y, b.y)
+      const dd = dx * dx + dy * dy
+      if (dd < bestD) { bestD = dd; best = i }
+    }
+    b.berth = best
+  }
+
+  // Parallel to a nearby shore, or a gentle curve back toward land when the sea is empty.
+  function coastSteer(b) {
+    const land = landNear(b.x, b.y, 72)
+    if (land.d > 72) return Math.sin(time * 0.07 + b.phase) * 0.2
+    const toLand = Math.atan2(land.x, -land.y)
+    if (land.d >= 28) {
+      const side = b.phase < Math.PI ? 0.85 : -0.85
+      return clamp(wrapAngle(toLand + side - b.yaw) * 0.55, -0.4, 0.4)
+    }
+    const a = toLand - Math.PI / 2
+    const c = toLand + Math.PI / 2
+    const parallel = Math.abs(wrapAngle(a - b.yaw)) < Math.abs(wrapAngle(c - b.yaw)) ? a : c
+    return clamp(wrapAngle(parallel - b.yaw) * 0.8, -0.45, 0.45)
+  }
+
+  function steerBoat(b) {
+    const wander = Math.sin(time * 0.09 + b.phase) * 0.1
+    if (b.intent === 1 && b.berth >= 0) {
+      const dock = docks[b.berth]
+      const spot = offDock(dock, 24)
+      const dx = wrapDelta(spot.x, b.x)
+      const dy = wrapDelta(spot.y, b.y)
+      const dist = Math.hypot(dx, dy)
+      if (dist > 0.5 && matAt(spot.x, spot.y) < 4) {
+        const aim = Math.atan2(dx, -dy)
+        const mix = dist < 40 ? clamp((40 - dist) / 40, 0, 0.65) : 0
+        return clamp(wrapAngle(aim + wrapAngle(dock.yaw - aim) * mix - b.yaw) * 1.25, -1.05, 1.05)
+      }
+    }
+    return coastSteer(b) + wander
+  }
+
+  function crowdTurn(b) {
+    const sn = Math.sin(b.yaw)
+    const cs = Math.cos(b.yaw)
+    let push = 0
+    for (let k = 0; k < boats.length; k++) {
+      const o = boats[k]
+      if (o === b) continue
+      const dx = wrapDelta(o.x, b.x)
+      const dy = wrapDelta(o.y, b.y)
+      const d2 = dx * dx + dy * dy
+      if (d2 > 26 * 26 || d2 < 0.01) continue
+      const along = dx * sn - dy * cs
+      if (along < 2) continue
+      const side = dx * cs + dy * sn
+      push += (side >= 0 ? -1 : 1) * (along < 12 ? 1 : 0.45)
+    }
+    return clamp(push, -1.2, 1.2)
+  }
+
+  function hullHitsBoat(b, x, y) {
+    for (let k = 0; k < boats.length; k++) {
+      const o = boats[k]
+      if (o === b) continue
+      const dx = wrapDelta(o.x, x)
+      const dy = wrapDelta(o.y, y)
+      if (dx * dx + dy * dy < 11 * 11) return true
+    }
+    return false
+  }
+
+  function lineWater(x, y, tx, ty) {
+    const dx = wrapDelta(tx, x)
+    const dy = wrapDelta(ty, y)
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 3))
+    for (let s = 1; s <= steps; s++) {
+      if (matAt(x + (dx * s) / steps, y + (dy * s) / steps) >= 4) return false
+    }
+    return true
+  }
+
+  function tryDock(b, i) {
+    if (b.berth < 0 || !spotOk(b)) { b.berth = spotOk(b) ? b.berth : -1; return }
+    const dock = docks[b.berth]
+    const spot = offDock(dock, 24)
+    const sx = wrapDelta(spot.x, b.x)
+    const sy = wrapDelta(spot.y, b.y)
+    if (sx * sx + sy * sy > 6 * 6) return
+    b.x = spot.x
+    b.y = spot.y
+    b.yaw = dock.yaw
+    b.moored = true
+    b.turn = 0
+    boatLog.info('tied up at a dock', { boat: i })
+  }
+
+  function tryAnchor(b, i) {
+    if (b.leg < 28) return
+    const land = landNear(b.x, b.y, 40)
+    if (land.d < 16 || land.d > 24) return
+    if (seaClear(b.x, b.y, b.yaw, 28) < 20) return
+    const sn = Math.sin(b.yaw)
+    const cs = Math.cos(b.yaw)
+    const rx = cs
+    const ry = sn
+    if (matAt(b.x + rx * 5, b.y + ry * 5) >= 4 || matAt(b.x - rx * 5, b.y - ry * 5) >= 4) return
+    if (matAt(b.x + sn * 8, b.y - cs * 8) >= 4 || matAt(b.x - sn * 8, b.y + cs * 8) >= 4) return
+    for (let k = 0; k < docks.length; k++) {
+      const dx = wrapDelta(b.x, docks[k].bx)
+      const dy = wrapDelta(b.y, docks[k].by)
+      if (dx * dx + dy * dy < 40 * 40) return
+    }
+    b.moored = true
+    b.turn = 0
+    boatLog.info('sails down near shore', { boat: i })
+  }
+
   function stepBoats(dt) {
     for (let i = 0; i < boats.length; i++) {
       const b = boats[i]
       if (i === aboard || b.moored) continue
-      const look = 16
+      b.leg += dt
+      if (b.intent === 1) {
+        b.seek += dt
+        if (!spotOk(b) && b.seek > 2) {
+          pickBerth(b)
+          b.seek = 0
+        } else if (spotOk(b) && b.seek > 25) {
+          const spot = offDock(docks[b.berth], 24)
+          const dx = wrapDelta(spot.x, b.x)
+          const dy = wrapDelta(spot.y, b.y)
+          if (dx * dx + dy * dy > 90 * 90) { pickBerth(b); b.seek = 0 }
+          else b.seek = 20
+        }
+      }
+      let homing = null
+      if (b.intent === 1 && spotOk(b)) {
+        const spot = offDock(docks[b.berth], 24)
+        const dx = wrapDelta(spot.x, b.x)
+        const dy = wrapDelta(spot.y, b.y)
+        homing = { dx, dy, dist: Math.hypot(dx, dy) }
+        if (homing.dist < 10 && matAt(b.x, b.y) < 4 && lineWater(b.x, b.y, spot.x, spot.y)) {
+          b.x = spot.x
+          b.y = spot.y
+          b.yaw = docks[b.berth].yaw
+          b.moored = true
+          b.turn = 0
+          boatLog.info('tied up at a dock', { boat: i })
+          continue
+        }
+      }
+      const ahead = seaClear(b.x, b.y, b.yaw, 52)
+      let want
+      if (homing && homing.dist < 48 && ahead > 10) {
+        if (b.avoidT > 0) b.avoidT -= dt
+        want = clamp(wrapAngle(Math.atan2(homing.dx, -homing.dy) - b.yaw) * 1.4, -1.15, 1.15)
+      } else if (ahead < 34) {
+        const left = seaClear(b.x, b.y, b.yaw - 0.85, 52) + seaClear(b.x, b.y, b.yaw - 1.5, 48)
+        const right = seaClear(b.x, b.y, b.yaw + 0.85, 52) + seaClear(b.x, b.y, b.yaw + 1.5, 48)
+        let dir
+        if (b.avoid && b.avoidT > 0 && ahead > 8) dir = b.avoid
+        else if (left === right) dir = b.avoid || (b.phase < Math.PI ? -1 : 1)
+        else dir = left > right ? -1 : 1
+        b.avoid = dir
+        b.avoidT = ahead < 16 ? 2.2 : 1.3
+        want = dir * (ahead < 12 ? 1.55 : ahead < 22 ? 1.05 : 0.62)
+      } else {
+        if (b.avoidT > 0) b.avoidT -= dt
+        else b.avoid = 0
+        const land = landNear(b.x, b.y, 72)
+        if (land.d < 14) {
+          want = clamp(wrapAngle(Math.atan2(-land.x, land.y) - b.yaw) * 1.1, -1.3, 1.3)
+        } else if (b.avoidT > 0) {
+          want = b.avoid * 0.35
+        } else {
+          want = steerBoat(b)
+        }
+      }
+      const crowd = crowdTurn(b)
+      if (crowd) want = clamp(want + crowd, -1.6, 1.6)
+      b.turn += (want - b.turn) * (1 - Math.exp(-dt * 2.4))
+      const rate = ahead < 14 ? 1.7 : 1.05
+      b.yaw = wrapAngle(b.yaw + b.turn * dt * rate)
+      let spd = b.speed * (ahead < 18 ? 0.55 : 1) * (1 - 0.35 * Math.min(1, Math.abs(b.turn)))
+      if (crowd) spd *= 0.7
+      if (homing && homing.dist < 36) spd *= clamp(homing.dist / 22, 0.4, 1)
       const sn = Math.sin(b.yaw)
       const cs = Math.cos(b.yaw)
-      const ahead = matAt(b.x + sn * look, b.y - cs * look)
-      const left = matAt(b.x + Math.sin(b.yaw - 0.9) * look, b.y - Math.cos(b.yaw - 0.9) * look)
-      const right = matAt(b.x + Math.sin(b.yaw + 0.9) * look, b.y - Math.cos(b.yaw + 0.9) * look)
-      let want = Math.sin(time * 0.18 + b.phase) * 0.2
-      if (ahead >= 4) want = left < 4 && right >= 4 ? -1.1 : right < 4 && left >= 4 ? 1.1 : left <= right ? -1.2 : 1.2
-      else if (left >= 4 && right < 4) want = -0.28
-      else if (right >= 4 && left < 4) want = 0.28
-      b.turn += (want - b.turn) * (1 - Math.exp(-dt * 1.4))
-      b.yaw += b.turn * dt * 0.85
-      b.x += Math.sin(b.yaw) * b.speed * dt
-      b.y -= Math.cos(b.yaw) * b.speed * dt
-      if (matAt(b.x, b.y) >= 4) {
-        b.x -= Math.sin(b.yaw) * b.speed * dt * 2.2
-        b.y += Math.cos(b.yaw) * b.speed * dt * 2.2
-        b.yaw += 1.6 * dt
+      const nx = b.x + sn * spd * dt
+      const ny = b.y - cs * spd * dt
+      const bow = ahead < 14 ? 6 : 8
+      const open = matAt(nx, ny) < 4
+        && matAt(nx + sn * bow, ny - cs * bow) < 4
+        && matAt(nx + cs * 3.5, ny + sn * 3.5) < 4
+        && matAt(nx - cs * 3.5, ny - sn * 3.5) < 4
+        && !hullHitsBoat(b, nx, ny)
+      if (open) {
+        b.x = wrapPos(nx)
+        b.y = wrapPos(ny)
+        b.stuck = 0
+      } else {
+        b.stuck += dt
+        const kick = b.avoid || (b.phase < Math.PI ? -1 : 1)
+        b.yaw = wrapAngle(b.yaw + kick * (1.5 + Math.min(b.stuck, 2.5)) * dt)
       }
-      b.x = ((b.x % N) + N) % N
-      b.y = ((b.y % N) + N) % N
+      if (b.intent === 1) tryDock(b, i)
+      else if (b.intent === 2) tryAnchor(b, i)
     }
     trimSails(dt)
     replenishDocks(dt)
@@ -3777,8 +4035,8 @@ export function createScene(initial) {
               _zb[o] = v
             }
           } else {
-            for (let y = yR, o = yR * W + px; y < cY; y++, o += W) {
-              if (_fb[o] === 0) { _fb[o] = side; _zb[o] = v }
+          for (let y = yR, o = yR * W + px; y < cY; y++, o += W) {
+            if (_fb[o] === 0) { _fb[o] = side; _zb[o] = v }
             }
           }
           cY = yR
@@ -5154,16 +5412,16 @@ export function createScene(initial) {
           const r2 = u * u + w * w
           if (r2 > R * R) continue
           const V = hV + u * rV + w * uV
-          const den = 1 + q * V
-          if (den < 0.2) continue
-          const m = S / den
+            const den = 1 + q * V
+            if (den < 0.2) continue
+            const m = S / den
           const x = Math.round(vCx + m * (hU + u * rU + w * uU))
           const yy = Math.round(vCy - m * (hW + u * rW + w * uW + tn * V))
           if (x < 0 || yy < 0 || x >= W || yy >= H) continue
           const at = yy * W + x
           const mk = _mk[at]
           if (mk === 2 || (mk === 1 && !front)) continue
-          if (_zb[at] < V - 1) continue
+                if (_zb[at] < V - 1) continue
           const r = Math.sqrt(r2)
           const blade = Math.abs(-u * sa + w * ca) < 0.35 + 0.25 * (r / R)
           const ghost = !blade && Math.abs(-u * sg + w * cg) < 0.4 + 0.3 * (r / R)
