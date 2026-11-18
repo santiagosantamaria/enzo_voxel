@@ -115,6 +115,8 @@ Pitch is inverted only for the jet, and only in `sendKeys`: Up subtracts from cl
 
 On a coarse pointer, or `touchControls="on"`, there are on-screen buttons. Ctrl is not a game key. B is the bomb key.
 
+- **The frame on a phone.** Once the screen is known to be touched (`fingerScreen`), `layout` makes the game pixel no bigger than gives the frame `PHONE_PIXELS` (150,000). That is a little more than a 1280 by 720 desktop at `pixelSize` 3, so a phone shows about as much of the world and costs about the same to draw. A fixed `pixelSize` of 3 would give a phone a frame of about 125 by 271. The pixel is a whole number of the screen's own pixels (`devicePixelRatio`), so the art stays crisp: on a 375 by 812 phone at 3× that is 4 screen pixels, a frame of 281 by 609. The buttons and the hint are sized in CSS pixels, so they stay big. The buttons are 80 by 64 and the hint is 12 px.
+
 - **Flying.** View, Boost and Bomb, and Walk (V). A finger steers the plane and a tap rolls it.
 - **On foot.** Fly (V), View, and Board (E). Board shows only when it would do something, a boat within 48 (`scene.canBoard`, looked at five times a second). Aboard it reads Ashore, and shows when land is within 28. Bomb and Boost are hidden.
 - **The stick.** On foot, a finger dragged on the screen is a stick from where it went down, shown as a ring and a knob. Sideways turns and up or down walks, at full speed `STICK_R` (46 CSS pixels) out, nothing inside `STICK_DEAD` (8). It is added to the keys in `sendKeys`, and the wrapper captures the pointer so a finger lifted over a button still ends it.

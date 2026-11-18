@@ -17,6 +17,10 @@ const TOUCH_HINTS = {
   cockpit: 'Touch to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for overhead · Walk to go on foot',
 }
 
+// On a phone the frame has about this many pixels, a little more than a 1280 by 720 desktop's, so it shows
+// as much of the world and costs about the same to draw (pixelSize alone would leave a phone a tiny frame)
+const PHONE_PIXELS = 150000
+
 // On foot, a finger dragged on the screen is a stick: this far (CSS pixels) is full speed, under STICK_DEAD is none
 const STICK_R = 46
 const STICK_DEAD = 8
@@ -66,6 +70,8 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const actionsRef = useRef({ toggleWalk() {}, board() {} }) // V and E, for the buttons too
   const buttonsRef = useRef(false)
   buttonsRef.current = buttons
+  const phoneRef = useRef(false)
+  phoneRef.current = fingerScreen
 
   // on the clock, the light follows the browser's clock until N is pressed: it is looked at every minute,
   // so the light eases to night at 8 in the evening and to day at 7. After N the light is the player's.
@@ -141,7 +147,14 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       const ch = wrap.clientHeight
       if (!cw || !ch) return
       const auto = Math.min(12, Math.max(2, Math.round(Math.sqrt((cw * ch) / 100000))))
-      const px = pixelRef.current > 0 ? Math.round(pixelRef.current) : auto
+      let px = pixelRef.current > 0 ? Math.round(pixelRef.current) : auto
+      if (phoneRef.current) {
+        // a pixel no bigger than gives the frame PHONE_PIXELS, and a whole number of the screen's own
+        // pixels, so the pixel art stays crisp
+        const dpr = window.devicePixelRatio || 1
+        const want = Math.sqrt((cw * ch) / PHONE_PIXELS)
+        px = Math.min(px, Math.max(1, Math.round(want * dpr)) / dpr)
+      }
       const lw = Math.ceil(cw / px)
       const lh = Math.ceil(ch / px)
       const sizeChanged = canvas.width !== lw || canvas.height !== lh
@@ -348,7 +361,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
 
   useEffect(() => {
     layoutRef.current()
-  }, [pixelSize])
+  }, [pixelSize, fingerScreen])
 
   const firstView = useRef(true)
   useEffect(() => {
@@ -475,7 +488,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         ? 'WASD walks · E hops on a boat · Space for overhead · V back to the plane'
         : 'WASD walks · E hops on a boat · Space for first person · V back to the plane')
   const buttonLook =
-    'absolute flex h-14 w-[4.5rem] cursor-pointer select-none items-center justify-center rounded-[4px] border font-mono text-[11px] uppercase leading-none tracking-[0.14em] text-white/90 outline-none transition-colors duration-100 focus-visible:border-white'
+    'absolute flex h-16 w-20 cursor-pointer select-none items-center justify-center rounded-[5px] border font-mono text-[13px] uppercase leading-none tracking-[0.14em] text-white/90 outline-none transition-colors duration-100 focus-visible:border-white'
 
   return (
     <div
@@ -562,7 +575,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
           style={{ opacity: onFoot || hint.on ? 1 : 0 }}
         >
           <p
-            className="rounded-[3px] bg-[#0b1a33]/55 px-2.5 py-1.5 text-center font-mono text-[11px] uppercase leading-none tracking-[0.14em] text-white/90"
+            className={`rounded-[3px] bg-[#0b1a33]/55 px-2.5 py-1.5 text-center font-mono uppercase tracking-[0.14em] text-white/90 ${buttons ? 'text-[12px] leading-[1.4]' : 'text-[11px] leading-none'}`}
             style={{ textShadow: '0 1px 0 rgba(0,0,0,.45)' }}
           >
             {(footHint || hints[hint.mode]) + (buttons ? '' : night ? ' · N for day' : ' · N for night')}
@@ -575,7 +588,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
             type="button"
             aria-label={onFoot ? 'Back to the plane' : 'Walk: put the man down on land nearby'}
             className={`${buttonLook} border-white/30 bg-[#0b1a33]/60 active:bg-[#0b1a33]/90`}
-            style={{ left: 'max(14px, env(safe-area-inset-left))', bottom: 'calc(max(14px, env(safe-area-inset-bottom)) + 68px)', touchAction: 'none' }}
+            style={{ left: 'max(14px, env(safe-area-inset-left))', bottom: 'calc(max(14px, env(safe-area-inset-bottom)) + 76px)', touchAction: 'none' }}
             onClick={tapButton(() => actionsRef.current.toggleWalk())}
             onPointerDown={mine}
             onPointerMove={mine}
@@ -618,7 +631,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
                 className={`${buttonLook} ${bombing ? 'border-white/70 bg-[#7a2418]/90' : 'border-white/30 bg-[#0b1a33]/60'}`}
                 style={{
                   right: 'max(14px, env(safe-area-inset-right))',
-                  bottom: 'calc(max(14px, env(safe-area-inset-bottom)) + 68px)',
+                  bottom: 'calc(max(14px, env(safe-area-inset-bottom)) + 76px)',
                   touchAction: 'none',
                 }}
                 onPointerDown={bombOn}
