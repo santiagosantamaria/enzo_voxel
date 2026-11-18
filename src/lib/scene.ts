@@ -501,6 +501,9 @@ const BOAT_ISO_TAN = 0.62
 /** there, clouds open (and a plane turns to a ghost) within this many units of the boat's middle, BOAT_ISO_MID up */
 const BOAT_ISO_HOLE = 27
 const BOAT_ISO_MID = 5.5
+/** walking, seen from above: the clouds open within this many units of the man's middle, WALK_MID up */
+const WALK_HOLE = 8
+const WALK_MID = 2
 /** half the beam at f and height z, or -1 outside the hull (the waterline is shorter and narrower than the deck) */
 function yachtHalf(y, f, z) {
   const half = y.L / 2
@@ -4622,6 +4625,17 @@ export function createScene(initial) {
     f.holeR = onFoot && aboard >= 0 && footView === 0 ? BOAT_ISO_HOLE * S : 0
     f.holeCx = Cx
     f.holeCy = Cy - BOAT_ISO_MID * S
+    // walking, seen from above and behind: a cloud can drift between the camera and the man, so the
+    // clouds open around him too, sized by how big he is on the screen
+    if (onFoot && aboard < 0 && footView === 0) {
+      const x = walker.x - N * Math.round((walker.x - cam.x) / N)
+      const y = walker.y - N * Math.round((walker.y - cam.y) / N)
+      if (project(x, y, walker.z + WALK_MID)) {
+        f.holeR = WALK_HOLE * prM
+        f.holeCx = prX
+        f.holeCy = prY
+      }
+    }
     f.cdx = (time * 7) % NC
     f.cdy = (time * 3) % NC
     f.csx = sunX * CLOUD_ALT - f.cdx + NC
