@@ -3709,6 +3709,26 @@ export function createScene(initial) {
     walker.yaw = boats[best].yaw
     return true
   }
+  /**
+   * a tap on a phone while aboard: set sail if the boat lies still, or stop it. Enzo out on deck goes back
+   * to the cockpit first, as he does for W. Whether the boat is now under way, or about to be.
+   */
+  function sailToggle() {
+    if (!onFoot || aboard < 0) return false
+    const b = boats[aboard]
+    if (!b) return false
+    if (sailing) {
+      sailing = false
+      return false
+    }
+    if (lounge > 0 || loungeDir !== 0) {
+      loungeGo = true
+      loungeDir = -1
+      return true
+    }
+    castOff(b)
+    return true
+  }
   function castOff(b) {
     sailing = true
     b.moored = false
@@ -6878,6 +6898,7 @@ export function createScene(initial) {
     toggleFootView,
     setWalk,
     board,
+    sailToggle,
     /** N: towards night, or back towards day (from wherever the light is now) */
     toggleNight() {
       dayGoal = dayGoal > 0.5 ? 0 : 1
@@ -6903,6 +6924,18 @@ export function createScene(initial) {
     get onFoot() { return onFoot },
     get aboard() { return aboard >= 0 },
     get footView() { return footView === 1 ? 'first' : 'above' },
+    /** the boat you are in is under way */
+    get sailing() { return aboard >= 0 && sailing },
+    /** whether E would do something now: on foot, a boat within reach; aboard, a shore within reach */
+    get canBoard() {
+      if (!onFoot) return false
+      if (aboard >= 0) {
+        const b = boats[aboard]
+        return !!b && !!nearestStand(b.x, b.y, 28)
+      }
+      for (const b of boats) if (wrapDelta(b.x, walker.x) ** 2 + wrapDelta(b.y, walker.y) ** 2 < 48 * 48) return true
+      return false
+    },
   }
 }
 

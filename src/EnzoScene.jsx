@@ -12,12 +12,25 @@ const HINTS = {
 }
 
 const TOUCH_HINTS = {
-  top: 'Touch to steer · Tap to roll · Hold Boost · Bomb the houses · View for chase view',
-  chase: 'Touch to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for the cockpit',
-  cockpit: 'Touch to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for overhead',
+  top: 'Touch to steer · Tap to roll · Hold Boost · Bomb the houses · View for chase view · Walk to go on foot',
+  chase: 'Touch to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for the cockpit · Walk to go on foot',
+  cockpit: 'Touch to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for overhead · Walk to go on foot',
 }
 
+// On foot, a finger dragged on the screen is a stick: this far (CSS pixels) is full speed, under STICK_DEAD is none
+const STICK_R = 46
+const STICK_DEAD = 8
+const stickAxis = (d) =>
+  Math.abs(d) < STICK_DEAD ? 0 : Math.max(-1, Math.min(1, (d - Math.sign(d) * STICK_DEAD) / (STICK_R - STICK_DEAD)))
+
 const viewOf = (v) => (v === 'cockpit' ? 'cockpit' : v === 'chase' ? 'chase' : 'top')
+
+/** timeOfDay="clock": the light from the browser's own clock, day from 7 in the morning and night from 8 in the evening */
+const clockLight = () => {
+  const h = new Date().getHours()
+  if (!Number.isFinite(h)) return 'day'
+  return h >= 7 && h < 20 ? 'day' : 'night'
+}
 
 const FLY = {
   ArrowLeft: 'left', KeyA: 'left',
@@ -43,15 +56,37 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const [onFoot, setOnFoot] = useState(false)
   const [aboard, setAboard] = useState(false)
   const [footView, setFootView] = useState('above')
+  const [canBoard, setCanBoard] = useState(false) // a boat in reach on foot, or a shore aboard
   const heldRef = useRef(new Set())
   const sendKeysRef = useRef(() => {})
   const steerRef = useRef(null)
+  const stickRef = useRef(null) // the finger steering on foot: where it went down, and the turn and move it gives
+  const ringRef = useRef(null)
+  const knobRef = useRef(null)
+  const actionsRef = useRef({ toggleWalk() {}, board() {} }) // V and E, for the buttons too
+  const buttonsRef = useRef(false)
+  buttonsRef.current = buttons
+
+  // on the clock, the light follows the browser's clock until N is pressed: it is looked at every minute,
+  // so the light eases to night at 8 in the evening and to day at 7. After N the light is the player's.
+  const [clock, setClock] = useState(clockLight)
+  const ownLightRef = useRef(false)
+  const onClock = rest.timeOfDay === 'clock'
+  useEffect(() => {
+    if (!onClock) return
+    const id = window.setInterval(() => {
+      if (ownLightRef.current) window.clearInterval(id)
+      else setClock(clockLight())
+    }, 60000)
+    return () => window.clearInterval(id)
+  }, [onClock])
 
   const params = { ...DEFAULT_PARAMS }
   for (const k of KEYS) {
     const v = rest[k]
     if (v !== undefined && v !== null) params[k] = v
   }
+  if (params.timeOfDay === 'clock') params.timeOfDay = clock
   if (noFire) params.flameStyle = 'pixel'
   const signature = JSON.stringify(params)
 
@@ -147,12 +182,19 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
 
     let raf = 0
     let last = performance.now()
+    let poll = 0
     const frame = (now) => {
       raf = requestAnimationFrame(frame)
       const dt = Math.min(0.05, Math.max(0, (now - last) / 1000))
       last = now
       if (!scene.width) return
       scene.step(dt)
+      // the Board button shows only when it would do something: looked at five times a second
+      if (buttonsRef.current && ++poll >= 12) {
+        poll = 0
+        setCanBoard(scene.canBoard)
+        setAboard(scene.aboard)
+      }
       const bytes = scene.render()
       if (!image || image.width !== scene.width || image.height !== scene.height) {
         image = new ImageData(scene.width, scene.height)
@@ -189,6 +231,12 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         else if (k === 'bomb') bomb = true
       })
       if (scene.onFoot) {
+        // a finger on the screen steers as well: sideways turns, and on land up and down walk
+        const st = stickRef.current
+        if (st) {
+          turn += st.turn
+          if (!scene.aboard) move += st.move
+        }
         scene.setWalk(turn, move)
         scene.setKeys(0, 0, false)
         scene.setBomb(false)
@@ -199,6 +247,30 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       }
     }
     sendKeysRef.current = sendKeys
+    // V: become the man, or go back to the plane; E: board the nearest boat, or step ashore
+    const toggleWalk = () => {
+      held.delete('TouchBoost')
+      held.delete('TouchBomb')
+      setBoosting(false)
+      setBombing(false)
+      stickRef.current = null
+      if (ringRef.current) ringRef.current.style.display = 'none'
+      scene.toggleFoot()
+      sendKeys()
+      setOnFoot(scene.onFoot)
+      setAboard(scene.aboard)
+      setFootView(scene.footView)
+      setCanBoard(scene.canBoard)
+      if (!scene.onFoot) revealHintRef.current(scene.view, 7)
+    }
+    const board = () => {
+      if (!scene.onFoot) return
+      scene.board()
+      sendKeys()
+      setAboard(scene.aboard)
+      setCanBoard(scene.canBoard)
+    }
+    actionsRef.current = { toggleWalk, board }
     const typing = (e) => {
       const el = e.target
       return !!el && el !== wrap && (/^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(el.tagName) || el.isContentEditable)
@@ -207,24 +279,19 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       if (typing(e)) return
       if (e.code === 'KeyV' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
-        scene.toggleFoot()
-        sendKeys()
-        setOnFoot(scene.onFoot)
-        setAboard(scene.aboard)
-        setFootView(scene.footView)
-        if (!scene.onFoot) revealHintRef.current(scene.view, 7)
+        toggleWalk()
         return
       }
       if (e.code === 'KeyN' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
+        ownLightRef.current = true // the clock no longer moves the light
         scene.toggleNight()
         setNight(scene.night)
         return
       }
       if (e.code === 'KeyE' && !e.repeat && scene.onFoot && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
-        scene.board()
-        setAboard(scene.aboard)
+        board()
         return
       }
       if (e.code === 'Space' || e.key === ' ') {
@@ -273,7 +340,10 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   }, [])
 
   useEffect(() => {
-    sceneRef.current?.setParams(paramsRef.current)
+    const scene = sceneRef.current
+    if (!scene) return
+    scene.setParams(paramsRef.current)
+    setNight(scene.night)
   }, [signature])
 
   useEffect(() => {
@@ -308,6 +378,48 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
     scene.pointerLeave()
   }
   const mine = (e) => e.stopPropagation()
+  // the stick on foot: it starts where the finger goes down, and a ring and a knob show it
+  const stickStart = (e) => {
+    const r = wrapRef.current.getBoundingClientRect()
+    stickRef.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t: performance.now(), moved: false, turn: 0, move: 0 }
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* touch already ended */ }
+    const ring = ringRef.current
+    if (ring) {
+      ring.style.display = 'block'
+      ring.style.transform = `translate(${e.clientX - r.left - STICK_R}px, ${e.clientY - r.top - STICK_R}px)`
+    }
+    if (knobRef.current) knobRef.current.style.transform = 'translate(0px, 0px)'
+  }
+  const stickMove = (e) => {
+    const st = stickRef.current
+    if (!st || st.id !== e.pointerId) return
+    let dx = e.clientX - st.x0
+    // aboard, a drag only steers: up and down mean nothing, a tap sets sail or stops
+    let dy = sceneRef.current?.aboard ? 0 : e.clientY - st.y0
+    if (Math.hypot(e.clientX - st.x0, e.clientY - st.y0) > 12) st.moved = true
+    st.turn = stickAxis(dx)
+    st.move = stickAxis(-dy)
+    const l = Math.hypot(dx, dy)
+    if (l > STICK_R) {
+      dx *= STICK_R / l
+      dy *= STICK_R / l
+    }
+    if (knobRef.current) knobRef.current.style.transform = `translate(${dx}px, ${dy}px)`
+    sendKeysRef.current()
+  }
+  const stickEnd = (e, tap) => {
+    const st = stickRef.current
+    if (!st || st.id !== e.pointerId) return
+    stickRef.current = null
+    if (ringRef.current) ringRef.current.style.display = 'none'
+    sendKeysRef.current()
+    const scene = sceneRef.current
+    if (tap && scene?.aboard && !st.moved && performance.now() - st.t < 300) scene.sailToggle()
+  }
+  const tapButton = (fn) => () => {
+    fn()
+    wrapRef.current?.focus({ preventScroll: true })
+  }
   const nextView = () => {
     const scene = sceneRef.current
     if (!scene) return
@@ -351,6 +463,10 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   }
   const hints = buttons ? TOUCH_HINTS : HINTS
   const footHint = !onFoot ? null
+    : buttons
+      ? (aboard
+        ? `Tap to sail or stop · Drag sideways to steer · downwind is faster · Ashore near land · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`
+        : `Drag to walk · Board when a boat is near · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`)
     : aboard
       ? (footView === 'first'
         ? 'W starts · S stops · A D turn · downwind is faster · E ashore · Space for overhead · V back to the plane'
@@ -371,6 +487,10 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       onPointerEnter={() => wrapRef.current?.focus({ preventScroll: true })}
       onPointerMove={(e) => {
         if (byFinger(e)) {
+          if (stickRef.current) {
+            stickMove(e)
+            return
+          }
           const s = steerRef.current
           if (!s || s.id !== e.pointerId) return
           if (Math.hypot(e.clientX - s.x, e.clientY - s.y) > 12) s.moved = true
@@ -382,9 +502,13 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         const [x, y] = toScene(e)
         if (byFinger(e)) {
           if (!fingerScreen) setFingerScreen(true)
-          if (steerRef.current) return
-          steerRef.current = { id: e.pointerId, t: performance.now(), x: e.clientX, y: e.clientY, moved: false }
-          sceneRef.current?.pointerMove(x, y)
+          if (sceneRef.current?.onFoot) {
+            if (!stickRef.current) stickStart(e)
+          } else {
+            if (steerRef.current) return
+            steerRef.current = { id: e.pointerId, t: performance.now(), x: e.clientX, y: e.clientY, moved: false }
+            sceneRef.current?.pointerMove(x, y)
+          }
         } else {
           sceneRef.current?.pointerMove(x, y)
           sceneRef.current?.press()
@@ -393,17 +517,24 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         if (!hintTimer.current) hintTimer.current = window.setTimeout(() => setHint((h) => ({ ...h, on: false })), 9000)
       }}
       onPointerUp={(e) => {
-        if (byFinger(e)) endFinger(e, true)
-        else sceneRef.current?.release()
+        if (byFinger(e)) {
+          stickEnd(e, true)
+          endFinger(e, true)
+        } else sceneRef.current?.release()
       }}
       onPointerLeave={(e) => {
-        if (byFinger(e)) endFinger(e, false)
-        else sceneRef.current?.pointerLeave()
+        if (byFinger(e)) {
+          stickEnd(e, false)
+          endFinger(e, false)
+        } else sceneRef.current?.pointerLeave()
       }}
       onPointerCancel={(e) => {
-        if (byFinger(e)) endFinger(e, false)
-        else sceneRef.current?.pointerLeave()
+        if (byFinger(e)) {
+          stickEnd(e, false)
+          endFinger(e, false)
+        } else sceneRef.current?.pointerLeave()
       }}
+      onLostPointerCapture={(e) => stickEnd(e, false)}
     >
       <canvas
         ref={canvasRef}
@@ -413,6 +544,18 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         style={{ imageRendering: 'pixelated' }}
       />
       <canvas ref={fireRef} aria-hidden="true" className="pointer-events-none absolute block" />
+      <div
+        ref={ringRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute left-0 top-0 rounded-full border border-white/40 bg-[#0b1a33]/25"
+        style={{ display: 'none', width: STICK_R * 2, height: STICK_R * 2 }}
+      >
+        <div
+          ref={knobRef}
+          className="absolute rounded-full border border-white/70 bg-white/35"
+          style={{ left: STICK_R - 17, top: STICK_R - 17, width: 34, height: 34 }}
+        />
+      </div>
       {showHint && (
         <div
           className={`pointer-events-none absolute inset-x-0 flex justify-center px-4 transition-opacity duration-700 ${buttons || hint.mode === 'cockpit' || (onFoot && footView === 'first') ? 'top-4' : 'bottom-4'}`}
@@ -430,6 +573,32 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         <>
           <button
             type="button"
+            aria-label={onFoot ? 'Back to the plane' : 'Walk: put the man down on land nearby'}
+            className={`${buttonLook} border-white/30 bg-[#0b1a33]/60 active:bg-[#0b1a33]/90`}
+            style={{ left: 'max(14px, env(safe-area-inset-left))', bottom: 'calc(max(14px, env(safe-area-inset-bottom)) + 68px)', touchAction: 'none' }}
+            onClick={tapButton(() => actionsRef.current.toggleWalk())}
+            onPointerDown={mine}
+            onPointerMove={mine}
+            onPointerUp={mine}
+          >
+            {onFoot ? 'Fly' : 'Walk'}
+          </button>
+          {onFoot && canBoard && (
+            <button
+              type="button"
+              aria-label={aboard ? 'Step ashore' : 'Board the nearest boat'}
+              className={`${buttonLook} border-white/70 bg-[#0b1a33]/75 active:bg-[#0b1a33]/95`}
+              style={{ right: 'max(14px, env(safe-area-inset-right))', bottom: 'max(14px, env(safe-area-inset-bottom))', touchAction: 'none' }}
+              onClick={tapButton(() => actionsRef.current.board())}
+              onPointerDown={mine}
+              onPointerMove={mine}
+              onPointerUp={mine}
+            >
+              {aboard ? 'Ashore' : 'Board'}
+            </button>
+          )}
+          <button
+            type="button"
             aria-label="Change view"
             className={`${buttonLook} border-white/30 bg-[#0b1a33]/60 active:bg-[#0b1a33]/90`}
             style={{ left: 'max(14px, env(safe-area-inset-left))', bottom: 'max(14px, env(safe-area-inset-bottom))', touchAction: 'none' }}
@@ -440,45 +609,49 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
           >
             View
           </button>
-          <button
-            type="button"
-            aria-label="Drop a bomb"
-            aria-pressed={bombing}
-            className={`${buttonLook} ${bombing ? 'border-white/70 bg-[#7a2418]/90' : 'border-white/30 bg-[#0b1a33]/60'}`}
-            style={{
-              right: 'max(14px, env(safe-area-inset-right))',
-              bottom: 'calc(max(14px, env(safe-area-inset-bottom)) + 68px)',
-              touchAction: 'none',
-            }}
-            onPointerDown={bombOn}
-            onPointerMove={mine}
-            onPointerUp={bombOff}
-            onPointerCancel={bombOff}
-            onLostPointerCapture={bombOff}
-            onContextMenu={(e) => e.preventDefault()}
-          >
-            Bomb
-          </button>
-          <button
-            type="button"
-            aria-label="Throttle: hold to open it and trail smoke"
-            aria-pressed={boosting}
-            className={`${buttonLook} ${boosting ? 'border-white/70' : 'border-white/30 bg-[#0b1a33]/60'}`}
-            style={{
-              right: 'max(14px, env(safe-area-inset-right))',
-              bottom: 'max(14px, env(safe-area-inset-bottom))',
-              touchAction: 'none',
-              backgroundColor: boosting ? params.accentColor : undefined,
-            }}
-            onPointerDown={boostOn}
-            onPointerMove={mine}
-            onPointerUp={boostOff}
-            onPointerCancel={boostOff}
-            onLostPointerCapture={boostOff}
-            onContextMenu={(e) => e.preventDefault()}
-          >
-            Boost
-          </button>
+          {!onFoot && (
+            <>
+              <button
+                type="button"
+                aria-label="Drop a bomb"
+                aria-pressed={bombing}
+                className={`${buttonLook} ${bombing ? 'border-white/70 bg-[#7a2418]/90' : 'border-white/30 bg-[#0b1a33]/60'}`}
+                style={{
+                  right: 'max(14px, env(safe-area-inset-right))',
+                  bottom: 'calc(max(14px, env(safe-area-inset-bottom)) + 68px)',
+                  touchAction: 'none',
+                }}
+                onPointerDown={bombOn}
+                onPointerMove={mine}
+                onPointerUp={bombOff}
+                onPointerCancel={bombOff}
+                onLostPointerCapture={bombOff}
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                Bomb
+              </button>
+              <button
+                type="button"
+                aria-label="Throttle: hold to open it and trail smoke"
+                aria-pressed={boosting}
+                className={`${buttonLook} ${boosting ? 'border-white/70' : 'border-white/30 bg-[#0b1a33]/60'}`}
+                style={{
+                  right: 'max(14px, env(safe-area-inset-right))',
+                  bottom: 'max(14px, env(safe-area-inset-bottom))',
+                  touchAction: 'none',
+                  backgroundColor: boosting ? params.accentColor : undefined,
+                }}
+                onPointerDown={boostOn}
+                onPointerMove={mine}
+                onPointerUp={boostOff}
+                onPointerCancel={boostOff}
+                onLostPointerCapture={boostOff}
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                Boost
+              </button>
+            </>
+          )}
         </>
       )}
     </div>

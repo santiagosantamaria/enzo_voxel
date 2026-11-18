@@ -113,7 +113,12 @@ Click (pointer down and up in under 0.2s) barrel-rolls the plane. Holding the po
 
 Pitch is inverted only for the jet, and only in `sendKeys`: Up subtracts from climb, Down adds. Walking uses the same keys with the natural sign (Up adds to move). Do not reuse the flight sign for the person.
 
-On a coarse pointer, or `touchControls="on"`, on-screen buttons cover View, Boost, and Bomb. There is no on-screen Walk or Board button. Ctrl is not a game key. B is the bomb key.
+On a coarse pointer, or `touchControls="on"`, there are on-screen buttons. Ctrl is not a game key. B is the bomb key.
+
+- **Flying.** View, Boost and Bomb, and Walk (V). A finger steers the plane and a tap rolls it.
+- **On foot.** Fly (V), View, and Board (E). Board shows only when it would do something, a boat within 48 (`scene.canBoard`, looked at five times a second). Aboard it reads Ashore, and shows when land is within 28. Bomb and Boost are hidden.
+- **The stick.** On foot, a finger dragged on the screen is a stick from where it went down, shown as a ring and a knob. Sideways turns and up or down walks, at full speed `STICK_R` (46 CSS pixels) out, nothing inside `STICK_DEAD` (8). It is added to the keys in `sendKeys`, and the wrapper captures the pointer so a finger lifted over a button still ends it.
+- **Aboard.** The stick only steers. A tap (under 300 ms, moved under 12 pixels) calls `scene.sailToggle()`: set sail, or stop. If Enzo is out on deck, he climbs back in first and then the boat sails, as with W.
 
 Hint text at the bottom follows the mode. While sailing it says W starts, S stops, and that downwind is faster.
 
@@ -142,7 +147,7 @@ Hint text at the bottom follows the mode. While sailing it says W starts, S stop
 | `chaseDistance` | 2.6 | Chase camera distance, in jet lengths. |
 | `chaseAngle` | 12 | Chase look-down, degrees. |
 | `chaseSize` | 0.19 | How large the jet is in the chase frame. |
-| `timeOfDay` | `day` | `day`, `sunset`, `night`: the light the game starts in. A change eases there, like N. See "Day and night". |
+| `timeOfDay` | `clock` | `day`, `sunset`, `night`: the light the game starts in. A change eases there, like N. `clock` (resolved in `EnzoScene`, not the scene) is the browser's own clock: day from 7:00, night from 20:00, looked at every minute until N is pressed. See "Day and night". |
 | `land` | 0.33 | Fraction of the map above water. |
 | `clouds` | 0.45 | How many of the generated cloud clusters are visible. |
 | `seed` | 7 | World seed, including wind direction. |
@@ -155,7 +160,7 @@ Hint text at the bottom follows the mode. While sailing it says W starts, S stop
 
 ## Day and night
 
-N turns the light towards night, or back towards day, from wherever it is. The change takes `DAY_FADE` (9) seconds and passes through dusk, so dawn is dusk played backwards. Lamps come on as the dusk deepens and go off at dawn.
+The game starts in the light of the browser's clock (`timeOfDay="clock"` in the demo): day from 7 in the morning, night from 8 in the evening. `EnzoScene` looks at the clock every minute, so the light eases over by itself at 7 and at 8, until N is pressed. After that the light is the player's. N turns the light towards night, or back towards day, from wherever it is. The change takes `DAY_FADE` (9) seconds and passes through dusk, so dawn is dusk played backwards. Lamps come on as the dusk deepens and go off at dawn.
 
 - **The phase.** `dayLin` moves at an even pace towards `dayGoal` (0 day, 1 night). `phase` is that, eased at both ends (`easeDay`). `todWeights(phase)` gives the weights of the day, sunset and night colours (`tw`): the day light turns to sunset light up to `DUSK` (0.45), where the sunset colours are `DUSK_PEAK` (85%) of the mix, then the sunset gives way to night. The `timeOfDay` param only says where the light starts (`sunset` is `DUSK`), and a new value eases there like N.
 - **Palettes.** Every colour that changes with the light is a mix of its day, sunset and night versions: `gradeT(c, aS, aN)` for graded colours, `mix3` and `mixN` for the sky, haze and other keyframes. `rebuildPalettes(false)` runs every frame of a fade (about 0.15 ms), and the GPU is sent the palette every frame anyway. The light's direction (`sunX`, `sunY`) moves too, so shadows swing round.

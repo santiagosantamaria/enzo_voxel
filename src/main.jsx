@@ -30,7 +30,7 @@ createRoot(document.getElementById('root')).render(
       chaseDistance={2.6}
       chaseAngle={12}
       chaseSize={0.19}
-      timeOfDay="day"
+      timeOfDay="clock"
       land={0.33}
       clouds={0.45}
       seed={7}
