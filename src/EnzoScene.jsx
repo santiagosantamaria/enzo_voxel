@@ -486,12 +486,12 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const footHint = !onFoot ? null
     : buttons
       ? (aboard
-        ? `Tap to sail or stop · Drag the way to steer · downwind is faster · Ashore near land · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`
+        ? `Tap to sail or stop · Drag the way to steer · Ashore near land · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`
         : `Drag to walk · Board when a boat is near · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`)
     : aboard
       ? (footView === 'first'
-        ? 'W starts · S stops · A D turn · downwind is faster · E ashore · Space for overhead · V back to the plane'
-        : 'W starts · S stops · A D turn · downwind is faster · E ashore · Space for first person · V back to the plane')
+        ? 'W starts · S stops · A D turn · E ashore · Space for overhead · V back to the plane'
+        : 'W starts · S stops · A D turn · E ashore · Space for first person · V back to the plane')
       : (footView === 'first'
         ? 'WASD walks · E hops on a boat · Space for overhead · V back to the plane'
         : 'WASD walks · E hops on a boat · Space for first person · V back to the plane')

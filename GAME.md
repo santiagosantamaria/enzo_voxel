@@ -122,7 +122,7 @@ On a coarse pointer, or `touchControls="on"`, there are on-screen buttons. Ctrl 
 - **The stick.** A finger dragged on the screen is a stick from where it went down, shown as a ring and a knob. On foot, sideways turns and up or down walks, at full speed `STICK_R` (46 CSS pixels) out, nothing inside `STICK_DEAD` (8). It is added to the keys in `sendKeys`, and the wrapper captures the pointer so a finger lifted over a button still ends it.
 - **Aboard.** A tap (under 300 ms, moved under 12 pixels) calls `scene.sailToggle()`: set sail, or stop. If Enzo is out on deck, he climbs back in first and then the boat sails, as with W. A drag points the boat: `scene.setAim(dx, dy)` passes the drag on the screen, and `stepFoot` turns the boat at the rate of A and D toward that heading in the world (the screen's up is heading `−vYaw`). In the isometric view the world stays still, so the boat turns until it points the way of the drag. In first person the view turns with the boat, so a finger held off to one side keeps it turning, like a tiller. A drag of under 12 pixels does nothing. A drag never sets sail or stops.
 
-Hint text at the bottom follows the mode. While sailing it says W starts, S stops, and that downwind is faster.
+Hint text at the bottom follows the mode. While sailing it says W starts and S stops.
 
 ## Parameters
 
