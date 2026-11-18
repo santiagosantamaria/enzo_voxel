@@ -61,6 +61,10 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const [aboard, setAboard] = useState(false)
   const [footView, setFootView] = useState('above')
   const [canBoard, setCanBoard] = useState(false) // a boat in reach on foot, or a shore aboard
+  // the first time aboard, how to sail glows softly in the hint until the boat sails or is left
+  const [sailCue, setSailCue] = useState(false)
+  const sailCueRef = useRef(false)
+  const boardedRef = useRef(false)
   const heldRef = useRef(new Set())
   const sendKeysRef = useRef(() => {})
   const stickRef = useRef(null) // the finger steering: where it went down, the way it has dragged, and the turn and move it gives
@@ -201,6 +205,10 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       last = now
       if (!scene.width) return
       scene.step(dt)
+      if (sailCueRef.current && (scene.sailing || !scene.aboard)) {
+        sailCueRef.current = false
+        setSailCue(false)
+      }
       // the Board button shows only when it would do something: looked at five times a second
       if (buttonsRef.current && ++poll >= 12) {
         poll = 0
@@ -293,6 +301,11 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       scene.board()
       sendKeys()
       setAboard(scene.aboard)
+      if (scene.aboard && !boardedRef.current) {
+        boardedRef.current = true
+        sailCueRef.current = true
+        setSailCue(true)
+      }
       setCanBoard(scene.canBoard)
     }
     actionsRef.current = { toggleWalk, board }
@@ -569,7 +582,18 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
             className={`rounded-[3px] bg-[#0b1a33]/55 px-2.5 py-1.5 text-center font-mono uppercase tracking-[0.14em] text-white/90 ${buttons ? 'text-[12px] leading-[1.4]' : 'text-[11px] leading-none'}`}
             style={{ textShadow: '0 1px 0 rgba(0,0,0,.45)' }}
           >
-            {(footHint || hints[hint.mode]) + (buttons ? '' : night ? ' · N for day' : ' · N for night')}
+            {(() => {
+              const text = (footHint || hints[hint.mode]) + (buttons ? '' : night ? ' · N for day' : ' · N for night')
+              if (!(sailCue && aboard)) return text
+              // the first part says how to sail: it glows
+              const cut = text.indexOf(' · ', buttons ? 0 : text.indexOf(' · ') + 1)
+              return (
+                <>
+                  <span className="sail-cue">{text.slice(0, cut)}</span>
+                  {text.slice(cut)}
+                </>
+              )
+            })()}
           </p>
         </div>
       )}

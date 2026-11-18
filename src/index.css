@@ -7,3 +7,25 @@ body,
   margin: 0;
   background: #2468b4;
 }
+
+/* the first time aboard: how to sail glows softly, over and over, until the boat sails */
+.sail-cue {
+  animation: sail-cue 1.8s ease-in-out infinite;
+}
+@keyframes sail-cue {
+  0%,
+  100% {
+    color: rgb(255 255 255 / 0.9);
+    text-shadow: 0 1px 0 rgb(0 0 0 / 0.45);
+  }
+  50% {
+    color: #ffe07a;
+    text-shadow: 0 1px 0 rgb(0 0 0 / 0.45), 0 0 8px rgb(255 214 102 / 0.55);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sail-cue {
+    animation: none;
+    color: #ffe07a;
+  }
+}
