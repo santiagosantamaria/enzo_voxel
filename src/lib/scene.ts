@@ -200,6 +200,32 @@ function grade(c, tod, amount) {
   return [c[0] + (r - c[0]) * amount, c[1] + (g - c[1]) * amount, c[2] + (b - c[2]) * amount]
 }
 
+// Day and night. The light runs on a phase from 0 (day) through DUSK (the sunset light) to 1 (night),
+// and every colour that changes with it is a mix of its day, sunset and night versions in the weights
+// todWeights gives. N moves the phase over DAY_FADE seconds, either way, so dawn is dusk backwards.
+const DUSK = 0.45
+const DUSK_PEAK = 0.85 // how much of the sunset colours there are at the height of dusk
+const DAY_FADE = 9
+const TOD_PHASE = { day: 0, sunset: DUSK, night: 1 }
+const NIGHT_LOG = log.child('night')
+function todWeights(s, out) {
+  if (s <= DUSK) {
+    out[1] = DUSK_PEAK * (s / DUSK)
+    out[0] = 1 - out[1]
+    out[2] = 0
+  } else {
+    const u = (s - DUSK) / (1 - DUSK)
+    out[2] = u
+    out[1] = DUSK_PEAK * (1 - u)
+    out[0] = (1 - DUSK_PEAK) * (1 - u)
+  }
+  return out
+}
+// the lamps come on as the dusk deepens, LAMP_ON0 to LAMP_ON1 of the phase, each at its own moment
+const LAMP_ON0 = 0.55
+const LAMP_ON1 = 0.9
+const WIN_LIT = 150 // of 256 villa windows, how many are lit at full night
+
 // tileable value noise, one octave added into `field`
 function addOctave(field, n, cell, amp, rnd) {
   const P = n / cell
@@ -406,6 +432,13 @@ const YACHT_COL = [
   [196, 194, 188], [224, 240, 250], [88, 56, 34], [44, 46, 52], [248, 208, 60], [62, 122, 56],
   // gulls: white, grey wings, black wing tips, yellow bill
   [244, 244, 240], [168, 176, 186], [36, 36, 42], [238, 188, 60],
+  // the chapel: travertine, brick, the lead of the dome, the gilt ball and cross
+  [228, 220, 200], [184, 110, 70], [146, 154, 164], [222, 184, 84],
+  // the garden temple: knapped flint, dark and pale, limestone, the ochre plaster of the niche's vault
+  [92, 96, 104], [152, 154, 152], [206, 196, 172], [206, 150, 100],
+  // lamps: the glass of an unlit lantern; then a lit lantern, the same in every shade and kept from
+  // the night's grading. Lamps stay last: k >= YM_LAMP is what makes a material a lamp.
+  [196, 206, 200], [255, 208, 128],
 ]
 const YM_FLUKE = 21
 const YM_WHALE = 23
@@ -427,6 +460,20 @@ const YM_GULL = 38
 const YM_GULL_WING = 39
 const YM_WING_TIP = 40
 const YM_BILL = 41
+const YM_TRAV = 42
+const YM_BRICK = 43
+const YM_LEAD = 44
+const YM_GOLD = 45
+const YM_FLINT = 46
+const YM_FLINT2 = 47
+const YM_LIME = 48
+const YM_OCHRE = 49
+const YM_GLASS = 50
+const YM_LAMP = 51
+const YM_WINDOW = 8 // a boat's deckhouse windows and its open hatch: lit from inside at night
+// the glow round each kind of lamp (packed like the frame: 0xAABBGGRR)
+const LAMP_WARM_GLOW = 0xff3c96ff // 255, 150, 60
+const FOUNTAIN_GLOW = 0xffffbe64 // 100, 190, 255
 const NYM = YACHT_COL.length
 // fish and whales
 // 0 whale back · 1 flank · 2 lit · 3 scars · 4 flippers · 5 dark (rim, blowholes) · 6 spray
@@ -739,7 +786,351 @@ const PROPS = [
     box(-0.6, 0.6, -0.6, 0.6, 0.8, 1.0, YM_MARBLE) // the lip
     box(-0.4, 0.4, -0.4, 0.4, 1.0, 1.4, (i, j, k) => ((i * 3 + j * 5 + k * 7) % 3 === 0 ? YM_LEAF : YM_BLOOM))
   }),
+  lampModel(false),
 ]
+// 4: a garden lamp, a slim iron post with a glass lantern on top, 4.2 tall; LAMP_LIT is the same lamp lit
+const P_LAMP = 4
+const LAMP_TOP = 3.7 // the middle of the lantern
+const LAMP_LIT = lampModel(true)
+function lampModel(lit) {
+  return propModel((box) => {
+    box(-0.2, 0.2, -0.2, 0.2, 0, 0.4, YM_IRON) // the foot
+    box(-0.1, 0.1, -0.1, 0.1, 0.4, 3.4, YM_IRON) // the post
+    // the lantern: glass panes between iron corners
+    box(-0.3, 0.3, -0.3, 0.3, 3.4, 4.0, (i, j) => (i !== 1 && j !== 1 ? YM_IRON : lit ? YM_LAMP : YM_GLASS))
+    box(-0.4, 0.4, -0.4, 0.4, 4.0, 4.2, YM_IRON) // its cap
+  })
+}
+
+// ── The chapel: one on the map, a small domed church in the Roman manner. A square block of brick
+// panels between travertine pilasters, arched windows and niches, a porch of two columns under a
+// pediment at the door, a cornice and a parapet; on it an octagonal drum with a window in each face;
+// then a ribbed lead dome with eight round dormer windows, and a lantern of eight columns with a small
+// cupola, a gilt ball and a cross. About 21 tall. It is drawn as voxels, like the boats, from
+// chapelAt(a, f, z): across, forward (the door is at +f) and up from its floor, in map units.
+const CH_TOP = 21.2
+const CH_BACK = 5.8 // the block's footprint: ±CH_BACK across and behind …
+const CH_STEPS = 7.0 // … and forward to the bottom step
+const CH_FORE = 11.5 // the paved square in front reaches this far forward
+const OCT_C = Array.from({ length: 8 }, (_, k) => Math.cos((k * Math.PI) / 4))
+const OCT_S = Array.from({ length: 8 }, (_, k) => Math.sin((k * Math.PI) / 4))
+let octD = 0 // octFace: how far out the point is towards its face …
+let octU = 0 // … and where along that face
+function octFace(a, f) {
+  octD = -1e9
+  for (let k = 0; k < 8; k++) {
+    const d = a * OCT_C[k] + f * OCT_S[k]
+    if (d > octD) {
+      octD = d
+      octU = -a * OCT_S[k] + f * OCT_C[k]
+    }
+  }
+}
+// angle from the nearest of eight directions spaced 45° apart, starting at `start`
+const near8 = (th, start) => {
+  const s = Math.PI / 4
+  const t = th - start
+  return Math.abs(t - s * Math.round(t / s))
+}
+function chapelAt(a, f, z) {
+  const A = Math.abs(a)
+  const F = Math.abs(f)
+  // the plinth, and the steps up to the door
+  if (z < 0.5) {
+    if (A <= 5.75 && F <= 5.75) return YM_TRAV
+    if (A <= 2.4 && f > 0 && (f <= 6.4 || (f <= CH_STEPS && z < 0.25))) return YM_TRAV
+    return 0
+  }
+  if (z < 6.4) {
+    // the porch: two columns, their entablature and the pediment over the door
+    if (f > 5.25 && A <= 2.4) {
+      if (z < 4.3) {
+        const dc = Math.hypot(A - 1.6, f - 5.85)
+        if (dc <= 0.34) return YM_TRAV
+      } else if (f <= 6.35) {
+        if (z < 4.8 && A <= 2.3) return YM_TRAV
+        if (z >= 4.8 && A <= 2.3 - (z - 4.8) * 1.7) return YM_TRAV
+      }
+    }
+    // the walls: which face, how far out and where along it
+    const side = A >= F
+    const out = side ? A : F
+    const u = side ? f : a
+    const U = Math.abs(u)
+    const front = !side && f > 0
+    if (A > 5.25 && F > 5.25) return A <= 5.5 && F <= 5.5 ? YM_TRAV : 0 // the corner pilasters
+    const pilaster = U >= 4.4 || (U >= 1.75 && U <= 2.45)
+    if (out > 5.25) return pilaster && out <= 5.5 ? YM_TRAV : 0
+    // windows, the door and the niches are let into the wall
+    let recess = 0
+    if (U < 1.0) {
+      if (front) recess = z < 3.5 && U < 0.85 ? YM_WOOD : z > 3.9 && z < 5.6 && U < 0.7 ? YM_WINDOW : 0
+      else if (U < 0.85 && ((z > 2.2 && z < 4.6) || (z >= 4.6 && (z - 4.6) ** 2 + u * u < 0.72))) recess = YM_WINDOW
+    } else if (U > 2.45 && U < 4.4) {
+      const du = U - 3.42
+      if (Math.abs(du) < 0.45 && z > 4.4 && z < 5.6) recess = YM_WINDOW
+      else if (Math.abs(du) < 0.55 && ((z > 1.4 && z < 3.2) || (z >= 3.2 && (z - 3.2) ** 2 + du * du < 0.3))) recess = YM_TRAV
+    }
+    if (recess) return out > 5.0 ? 0 : recess
+    if (z < 1.0 || pilaster || (z > 3.9 && z < 4.2)) return YM_TRAV
+    return YM_BRICK
+  }
+  if (z < 7.0) {
+    // the cornice, and the roof inside it
+    const r = z < 6.6 ? 5.55 : 5.75
+    if (A > r || F > r) return 0
+    return z > 6.75 && A < 5.2 && F < 5.2 ? YM_LEAD : YM_TRAV
+  }
+  // a parapet round the roof, with a little obelisk at each corner
+  if (z < 8.1 && (A > 5.0 || F > 5.0)) {
+    if (A > 5.55 || F > 5.55) return 0
+    if (A > 4.95 && F > 4.95) return z < 8.1 - Math.max(A - 4.95, F - 4.95) * 1.2 ? YM_TRAV : 0
+    return z < 7.5 && (A > 5.25 || F > 5.25) ? YM_TRAV : 0
+  }
+  if (z < 11.0) {
+    // the octagonal drum: brick between pilasters at the corners, a window in each face
+    octFace(a, f)
+    const U = Math.abs(octU)
+    if (octD > 4.6 || (octD > 4.4 && U < 1.35)) return 0
+    if (U < 0.55 && z > 8.0 && z < 9.9) return octD > 4.15 ? 0 : YM_WINDOW
+    if (U < 0.8 && z > 10.0 && z < 10.3) return YM_TRAV // the hood over the window
+    if (octD > 4.4) return YM_TRAV
+    return U >= 1.35 || z < 7.5 ? YM_TRAV : YM_BRICK
+  }
+  if (z < 11.5) {
+    octFace(a, f)
+    return octD <= 4.75 ? YM_TRAV : 0 // the drum's cornice
+  }
+  const r = Math.hypot(a, f)
+  const th = Math.atan2(f, a)
+  if (z < 16.1) {
+    // the dormers: eight round windows framed in stone, between the ribs, low on the dome
+    if (z < 13.4) {
+      for (let k = 0; k < 8; k++) {
+        const rho = a * OCT_C[k] + f * OCT_S[k]
+        const tau = -a * OCT_S[k] + f * OCT_C[k]
+        if (rho > 2 && rho <= 4.42 && Math.abs(tau) < 0.62) {
+          if (z > 13.0 && Math.abs(tau) > 0.62 - (z - 13.0) * 1.6) break // a rounded top
+          return rho > 4.12 && tau * tau + (z - 12.55) ** 2 < 0.16 ? YM_WINDOW : YM_TRAV
+        }
+      }
+    }
+  }
+  // the dome: lead between eight raised ribs of stone
+  const rib = r * near8(th, Math.PI / 8) < 0.28
+  const rd = 4.3 + (rib ? 0.14 : 0)
+  if (r < rd && z <= 11.5 + 4.6 * Math.sqrt(1 - (r / rd) ** 2)) return rib ? YM_TRAV : YM_LEAD
+  // the lantern: eight columns round a dark middle, under a little cupola, a gilt ball and a cross
+  if (z >= 15.7 && z < 18.0) {
+    if (r > 1.15) return 0
+    if (z < 16.1 || z > 17.5) return YM_TRAV
+    if (r > 0.85) return r * near8(th, 0) < 0.2 ? YM_TRAV : 0
+    return YM_WINDOW
+  }
+  if (z >= 18.0 && z < 18.3) return r <= 1.35 ? YM_TRAV : 0
+  if (z >= 18.3 && z < 19.2) return r <= 1.15 * Math.sqrt(1 - ((z - 18.3) / 0.9) ** 2) ? YM_LEAD : 0
+  if (a * a + f * f + (z - 19.5) ** 2 <= 0.11) return YM_GOLD
+  if (F <= 0.13 && ((A <= 0.13 && z >= 19.8 && z <= 21.0) || (A <= 0.42 && z >= 20.4 && z <= 20.65))) return YM_GOLD
+  return 0
+}
+// ── The garden temple: one on the map, a folly of knapped flint dressed in limestone. A wall with a tall
+// round-arched niche, and in it a marble statue on a pedestal; the vault of the niche plastered ochre.
+// Two pairs of columns on high plinths stand before the wall and carry an entablature that breaks forward
+// over them; over that an attic with an inscribed panel in the middle and four dies, one over each column,
+// with round caps. About 11 tall and 10 across, and shallow: from 1.7 behind its middle to 2 in front.
+// templeAt(a, f, z) as chapelAt: across, forward (the niche opens to +f), up.
+const TP_TOP = 11.2
+const TP_WALL = 0.5 // the front face of the wall
+const TP_NICHE = -1.0 // the back of the niche
+const TP_ARCH = 1.75 // the niche's half width, and the radius of its arch …
+const TP_SPRING = 4.7 // … which springs from this height
+const TP_COLS = [-4.0, -2.95, 2.95, 4.0] // the columns, across
+const TP_COL_F = 1.25 // and forward
+// the speckle of the flint, in squares of a quarter, so every level of detail shows the same stones
+function flintAt(a, f, z) {
+  let h = Math.imul(Math.floor(a * 4), 0x27d4eb2d) ^ Math.imul(Math.floor(f * 4), 0x165667b1) ^ Math.imul(Math.floor(z * 4), 0x9e3779b1)
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b)
+  h ^= h >>> 13
+  return (h & 7) < 3 ? YM_FLINT2 : YM_FLINT
+}
+/** the statue in the niche: a young man standing, his cloak over the left arm; h up from his feet, d forward */
+function templeStatue(a, h, d) {
+  const seg = (a0, d0, h0, a1, d1, h1, r) => {
+    const ua = a1 - a0, ud = d1 - d0, uh = h1 - h0
+    const t = clamp(((a - a0) * ua + (d - d0) * ud + (h - h0) * uh) / (ua * ua + ud * ud + uh * uh), 0, 1)
+    return (a - a0 - ua * t) ** 2 + (d - d0 - ud * t) ** 2 + (h - h0 - uh * t) ** 2 <= r * r
+  }
+  if (h < 0.12) return Math.abs(a) <= 0.42 && Math.abs(d) <= 0.32
+  if (h < 1.45) {
+    // the legs, the right one bearing his weight, the left a little forward and bent
+    if (seg(0.15, 0, 0.12, 0.13, 0, 1.45, 0.14) || seg(-0.17, 0.12, 0.12, -0.14, 0.02, 1.45, 0.13)) return true
+  }
+  if (h >= 1.3 && h < 2.42) {
+    const w = h > 2.15 ? 0.43 : 0.34 // the shoulders are broader than the waist
+    if ((a / w) ** 2 + (d / 0.2) ** 2 <= 1) return true
+  }
+  if (h >= 2.42 && h < 2.55) return a * a + d * d <= 0.09 ** 2 // the neck
+  if (a * a + d * d + (h - 2.7) ** 2 <= 0.17 ** 2) return true // the head
+  if (seg(0.42, 0, 2.28, 0.5, 0.03, 1.35, 0.08)) return true // the right arm, hanging
+  if (seg(-0.42, 0, 2.28, -0.6, 0.32, 1.8, 0.08)) return true // the left arm, held out
+  // the cloak, falling from the left forearm
+  return a >= -0.8 && a <= -0.5 && d >= -0.05 && d <= 0.36 && h >= 0.85 && h <= 1.95 - (a + 0.8) * 0.4
+}
+function templeAt(a, f, z) {
+  const A = Math.abs(a)
+  if (A > 5.05 || f < -1.75 || f > 2.05 || z > TP_TOP) return 0
+  // the pedestal and its statue, standing in the niche
+  const pd = f + 0.3
+  if (A <= 0.62 && Math.abs(pd) <= 0.57 && z < 1.45) {
+    if (z < 0.25 || z >= 1.25) return YM_LIME
+    return A <= 0.5 && Math.abs(pd) <= 0.45 ? YM_LIME : 0
+  }
+  if (z >= 1.45 && z < 4.5 && A < 0.9 && Math.abs(pd) < 0.45) return templeStatue(a, z - 1.45, pd) ? YM_MARBLE : 0
+  // the columns: a moulded base, the shaft, the capital and its square abacus
+  if (f > TP_WALL && z >= 1.35 && z < 6.9) {
+    for (const ac of TP_COLS) {
+      const r = Math.hypot(a - ac, f - TP_COL_F)
+      if (z < 1.6 ? r <= 0.55 : z < 6.45 ? r <= 0.42 - (z - 1.6) * 0.012 : z < 6.7 ? r <= 0.48 : Math.max(Math.abs(a - ac), Math.abs(f - TP_COL_F)) <= 0.55) return YM_LIME
+    }
+  }
+  const pair = A >= 2.35 && A <= 4.65 // over and under each pair of columns
+  // the high plinths the columns stand on, and the base course of the wall between them
+  if (z < 1.35 && pair && f <= 1.85) return z > 1.15 && f > 1.75 ? 0 : YM_LIME
+  if (z < 0.9 && f <= TP_WALL + 0.15 && A <= 5.0) {
+    if (A < TP_ARCH && f > TP_NICHE) return z < 0.2 ? YM_LIME : 0 // the floor of the niche
+    return YM_LIME
+  }
+  // the entablature, breaking forward over the columns
+  if (z >= 6.9 && z < 8.6) {
+    if (pair && f <= 1.75 && z < 8.15) return YM_LIME
+    if (A >= 2.25 && A <= 4.85 && f <= 2.0 && z >= 8.15) return YM_LIME // the cornice over the pair
+    if (f > TP_WALL) {
+      if (z < 7.25 && f <= TP_WALL + 0.12) return YM_LIME // the band over the arch
+      if (z >= 8.15 && f <= TP_WALL + 0.35) return YM_LIME // the cornice between the pairs
+      return 0
+    }
+  }
+  // the attic, its coping, the inscribed panel, and the four dies with their round caps
+  if (z >= 8.6) {
+    for (const ac of TP_COLS) {
+      const da = Math.abs(a - ac)
+      const df = f - (TP_COL_F - 0.15)
+      if (z < 10.5 && da <= 0.45 && f >= 0.25 && f <= 1.55) return YM_LIME
+      if (z >= 10.5 && z < 10.66 && da <= 0.52 && f >= 0.2 && f <= 1.62) return YM_LIME
+      if (z >= 10.66 && da * da + df * df + ((z - 10.66) * 0.95) ** 2 <= 0.42 ** 2) return YM_LIME
+    }
+    if (z >= 10.55) return 0
+    if (z >= 10.3) return A <= 4.85 && f >= -1.6 && f <= 0.45 ? YM_LIME : 0
+    if (A > 4.7 || f < -1.5 || f > 0.4) return 0
+    if (A <= 1.0 && z >= 9.0 && z < 9.85) return YM_LIME // the panel (the letters are too small to show)
+    return f > 0.3 ? 0 : flintAt(a, f, z)
+  }
+  if (f > TP_WALL) {
+    // what stands proud of the wall: the string course at the springing, the jambs, the archivolt and keystone
+    if (f > TP_WALL + 0.25 && !(A <= 0.32 && z > 6.2 && z < 7.0 && f <= TP_WALL + 0.32)) return 0
+    if (z >= 4.5 && z < 4.85 && A <= 5.0 && A >= TP_ARCH) return YM_LIME
+    if (A >= TP_ARCH && A <= 2.3 && z >= 0.9 && z < 4.5) return YM_LIME
+    const rr = Math.hypot(a, z - TP_SPRING)
+    if (z >= TP_SPRING && rr >= TP_ARCH && rr <= 2.2) return YM_LIME
+    if (A <= 0.32 && z > 6.2 && z < 7.0) return YM_LIME // the keystone, to the band over it
+    return 0
+  }
+  if (f < -1.7 || A > 5.0) return 0
+  // the wall, and the niche cut into it
+  const rr = Math.hypot(a, z - TP_SPRING)
+  const open = z < TP_SPRING ? A < TP_ARCH : rr < TP_ARCH
+  if (open) return f > TP_NICHE ? 0 : flintAt(a, f, z) // the back of the niche is flint
+  if (f > TP_NICHE - 0.25) {
+    // the sides of the niche are dressed stone; its vault is plastered
+    if (z < TP_SPRING ? A < TP_ARCH + 0.25 : rr < TP_ARCH + 0.25) return z < TP_SPRING ? YM_LIME : YM_OCHRE
+  }
+  if (z > 4.5 && z < 4.85) return YM_LIME // the string course runs on round the niche
+  return flintAt(a, f, z)
+}
+
+// The chapel and the temple are built the same way, at three levels of detail, far to near.
+const MON_LOD = [0.5, 0.25, 0.125]
+const MONUMENTS = {
+  chapel: { at: chapelAt, side: 6.1, back: 6.1, fore: 7.1, top: CH_TOP, reach: 15, mid: 9, models: [], build: null },
+  temple: { at: templeAt, side: 5.1, back: 1.8, fore: 2.1, top: TP_TOP, reach: 8, mid: 5.5, models: [], build: null },
+}
+/**
+ * the surface voxels of a monument at size g, normals from which of their neighbours are empty. It fills
+ * its grid a level at a time as step(ms) is called, for no longer than ms each time, so the finest model
+ * can be made over a few frames; done once model is set.
+ */
+function monumentBuilder(M, g) {
+  const na = Math.ceil(M.side / g)
+  const nb = Math.ceil(M.back / g)
+  const nf = Math.ceil(M.fore / g)
+  const NX = na * 2 + 1
+  const NY = nb + nf + 1
+  const NZ = Math.ceil(M.top / g)
+  const grid = new Uint8Array(NX * NY * NZ)
+  let k = 0
+  const B = { model: null, step }
+  return B
+  function step(ms) {
+    const t0 = performance.now()
+    while (k < NZ) {
+      const z = (k + 0.5) * g
+      for (let j = 0; j < NY; j++) {
+        const f = (j - nb) * g
+        const row = (k * NY + j) * NX
+        for (let i = 0; i < NX; i++) grid[row + i] = M.at((i - na) * g, f, z)
+      }
+      k++
+      if (performance.now() - t0 > ms) return B.model
+    }
+    // outside the grid is empty, except below the floor
+    const empty = (i, j, k) => k >= 0 && (i < 0 || j < 0 || i >= NX || j >= NY || k >= NZ || grid[(k * NY + j) * NX + i] === 0)
+    const A = [], F = [], Z = [], NA = [], NF = [], NZv = [], K = []
+    for (let k = 0; k < NZ; k++) {
+      for (let j = 0; j < NY; j++) {
+        for (let i = 0; i < NX; i++) {
+          const m = grid[(k * NY + j) * NX + i]
+          if (m === 0) continue
+          if (!empty(i - 1, j, k) && !empty(i + 1, j, k) && !empty(i, j - 1, k) && !empty(i, j + 1, k) && !empty(i, j, k - 1) && !empty(i, j, k + 1)) continue
+          let nx = 0, ny = 0, nz = 0
+          for (let dk = -1; dk <= 1; dk++) {
+            for (let dj = -1; dj <= 1; dj++) {
+              for (let di = -1; di <= 1; di++) {
+                if (empty(i + di, j + dj, k + dk)) { nx += di; ny += dj; nz += dk }
+              }
+            }
+          }
+          const l = Math.hypot(nx, ny, nz)
+          A.push((i - na) * g); F.push((j - nb) * g); Z.push((k + 0.5) * g)
+          if (l > 0) { NA.push(nx / l); NF.push(ny / l); NZv.push(nz / l) } else { NA.push(0); NF.push(0); NZv.push(1) }
+          K.push(m)
+        }
+      }
+    }
+    B.model = {
+      n: A.length,
+      A: Float32Array.from(A), F: Float32Array.from(F), Z: Float32Array.from(Z),
+      NA: Float32Array.from(NA), NF: Float32Array.from(NF), NZ: Float32Array.from(NZv), K: Uint8Array.from(K),
+    }
+    return B.model
+  }
+}
+/** a monument's model at a level of detail, made now if it is not made yet */
+function monumentModel(M, lod) {
+  return M.models[lod] || (M.models[lod] = monumentBuilder(M, MON_LOD[lod]).step(Infinity))
+}
+/** the finest model, made a few milliseconds at a time: null until it is done */
+function monumentFine(M, ms) {
+  if (M.models[2]) return M.models[2]
+  if (!M.build) M.build = monumentBuilder(M, MON_LOD[2])
+  const m = M.build.step(ms)
+  if (m) { M.models[2] = m; M.build = null }
+  return m
+}
+/** the top of a monument over the point (a, f) of its footprint, sampled down its column */
+function monumentHeight(M, a, f) {
+  for (let z = M.top; z > 0; z -= 0.25) if (M.at(a, f, z)) return z
+  return 0.5
+}
 
 // The gull, built like the props, with parts: 0 the body, 1 the left wing, 2 the right wing. The wings
 // beat about the shoulder (GULL_SHOULDER across, at the wing's own height). White, grey wings with
@@ -812,12 +1203,16 @@ export function createScene(initial) {
     sliceT.push(tc)
   }
 
-  // ── palettes (rebuilt when colours or the time of day change)
+  // ── palettes (rebuilt when colours change, and every frame while the light changes)
   const jetPal = new Uint32Array(96)
   const jetPalLit = new Uint32Array(96) // one tone up, for surfaces turned to the sun
   const jetPalDim = new Uint32Array(96) // one tone down, for surfaces turned away
+  const jetPalDay = new Uint32Array(96) // jetPal in daylight: the cockpit is painted in it, then toned live
+  const cockpitTint = [256, 256, 256] // that tone: r, g, b in 256ths
   let shutterLit = 0 // green shutters on the villas
   let shutterShade = 0
+  let winLit = 0 // a villa window lit from inside, at night
+  let winOn = 0 // how many windows in 256 are lit now: those whose hash8 is under this
   const topLit = new Uint32Array(NMAT)
   const topShade = new Uint32Array(NMAT)
   const sideLit = new Uint32Array(NMAT)
@@ -827,20 +1222,55 @@ export function createScene(initial) {
   const flamePal = new Uint32Array(6)
   const trailPal = new Uint32Array(3)
   const skyPal = new Uint32Array(NSKY)
+  const starPal = new Uint32Array(NSKY) // a star against each band of the sky, as bright as the night is dark
   let hazeCol = 0
   let cloudUnder = 0
-  let sunCol = 0
+  let sunCol = 0 // the low sun at dusk and dawn
   let sunGlow = 0
+  let moonCol = 0
+  let moonGlow = 0
   let sparkA = 0
   let sparkB = 0
   let foamCol = 0
   let sunX = 0.45
   let sunY = 0.3
+  let cockpitSun = SUN_DAY // the light that falls into the cockpit, and how strong it is
+  let cockpitPower = 1
+  let smokeNight = 1 // the exhaust smoke is fainter in the dark
+  let jetLitAt = 0.9 // how square to the light a side of the plane must be to take the lit tone …
+  let jetDimAt = 0.66 // … or how far from it to take the dim one
   const yachtPal = new Uint32Array(NYM * 4) // per boat material: shadow, side, top, lit side
   const lifePal = new Uint32Array(LIFE_COL.length)
 
-  function rebuildPalettes() {
-    const tod = p.timeOfDay
+  // the light: phase 0 day … 1 night (todWeights), eased from dayLin, which N moves at an even pace
+  let dayLin = TOD_PHASE[p.timeOfDay] ?? 0
+  let dayGoal = dayLin
+  const easeDay = (l) => 0.5 * l + 0.5 * l * l * (3 - 2 * l)
+  let phase = easeDay(dayLin)
+  const tw = [1, 0, 0] // the weights of the day, sunset and night colours
+  let lampK = 0 // 0 every lamp off … 1 every lamp on
+  let moonK = 0 // how much of the moon and the stars shows
+  // one number, or one colour, mixed from its day, sunset and night versions
+  const mixN = (d, s, n) => d * tw[0] + s * tw[1] + n * tw[2]
+  const mix3 = (d, s, n) => [mixN(d[0], s[0], n[0]), mixN(d[1], s[1], n[1]), mixN(d[2], s[2], n[2])]
+  const mixPacked = (d, s, n) =>
+    pack(mixN(d & 255, s & 255, n & 255), mixN((d >> 8) & 255, (s >> 8) & 255, (n >> 8) & 255), mixN((d >> 16) & 255, (s >> 16) & 255, (n >> 16) & 255))
+  // a colour graded for the light: aS of the sunset grade at dusk, aN of the night grade at night
+  const gradeT = (c, aS, aN) => mix3(c, grade(c, 'sunset', aS), grade(c, 'night', aN))
+  const toward = (c, to, k) => [c[0] + (to[0] - c[0]) * k, c[1] + (to[1] - c[1]) * k, c[2] + (to[2] - c[2]) * k]
+  /** one lamp, its own moment to come on given by h (0…255): 0 off … 1 fully on */
+  const lampOn = (h) => clamp((lampK - (h / 255) * 0.8) * 5, 0, 1)
+
+  function setPhase(s) {
+    phase = s
+    todWeights(s, tw)
+    lampK = clamp((s - LAMP_ON0) / (LAMP_ON1 - LAMP_ON0), 0, 1)
+    moonK = clamp((s - 0.62) / 0.3, 0, 1)
+  }
+  setPhase(phase)
+
+  /** every palette, for the colours and the light now; repaint: the cockpit too (it is slow) */
+  function rebuildPalettes(repaint = true) {
     // jet: recolour each family from its key tone
     const keys = {
       0: { key: 4, col: parseColor(p.bodyColor, [50, 84, 160]), def: [50, 84, 160] },
@@ -852,7 +1282,6 @@ export function createScene(initial) {
       const fam = row[4]
       if (fam < 3 && ((row[0] - 1) & 15) === keys[fam].key) keyLum[fam] = lum([row[1], row[2], row[3]])
     }
-    const jetAmount = tod === 'sunset' ? 0.5 : tod === 'night' ? 0.16 : 0
     for (const row of JET_PALETTE) {
       const idx = row[0]
       const fam = row[4]
@@ -871,8 +1300,9 @@ export function createScene(initial) {
             c = [k.col[0] + (255 - k.col[0]) * f, k.col[1] + (255 - k.col[1]) * f, k.col[2] + (255 - k.col[2]) * f]
           }
         }
-        c = grade(c, tod, jetAmount)
-      }
+        jetPalDay[idx] = pack(c[0], c[1], c[2])
+        c = gradeT(c, 0.5, 0.3)
+      } else jetPalDay[idx] = pack(c[0], c[1], c[2])
       jetPal[idx] = pack(c[0], c[1], c[2])
     }
     for (const row of JET_PALETTE) {
@@ -881,74 +1311,98 @@ export function createScene(initial) {
       jetPalLit[idx] = fam < 3 && jetPal[idx + 1] ? jetPal[idx + 1] : jetPal[idx]
       jetPalDim[idx] = fam < 3 && ((idx - 1) & 15) > 0 ? jetPal[idx - 1] : jetPal[idx]
     }
-    cockpit = null // repainted in the new colours shortly
-    cockpitDue = 0.3
+    // the grade above, as a tone for the cockpit (it is slow to paint, so it is painted in daylight)
+    const grey = gradeT([160, 160, 160], 0.5, 0.3)
+    for (let i = 0; i < 3; i++) cockpitTint[i] = Math.round((grey[i] / 160) * 256)
+    if (repaint) {
+      cockpit = null // repainted in the new colours shortly
+      cockpitDue = 0.3
+    }
     // world
     for (let m = 0; m < NMAT; m++) {
-      const t = grade(MAT_TOP[m], tod, 1)
-      const s = grade(MAT_SIDE[m], tod, 1)
+      const t = gradeT(MAT_TOP[m], 1, 1)
+      const s = gradeT(MAT_SIDE[m], 1, 1)
       topLit[m] = pack(t[0], t[1], t[2])
       sideLit[m] = pack(s[0], s[1], s[2])
       topShade[m] = pack(t[0] * 0.62, t[1] * 0.67, t[2] * 0.8)
       sideShade[m] = pack(s[0] * 0.62, s[1] * 0.67, s[2] * 0.8)
     }
-    const sh = grade([58, 104, 72], tod, 1)
+    const sh = gradeT([58, 104, 72], 1, 1)
     shutterLit = pack(sh[0], sh[1], sh[2])
     shutterShade = pack(sh[0] * 0.62, sh[1] * 0.67, sh[2] * 0.8)
+    winLit = pack(255, 194, 102)
+    winOn = Math.round(WIN_LIT * lampK)
     for (let k = 0; k < CK; k++) {
       const f = k / (CK - 1)
       const ft = Math.min(1, k / 2)
-      const ca = tod === 'night' ? 0.72 : 1
-      const t = grade([218 + 37 * ft, 230 + 25 * ft, 247 + 8 * ft], tod, ca)
-      const s = grade([158 + 44 * f, 182 + 36 * f, 222 + 18 * f], tod, ca)
+      const t = gradeT([218 + 37 * ft, 230 + 25 * ft, 247 + 8 * ft], 1, 0.72)
+      const s = gradeT([158 + 44 * f, 182 + 36 * f, 222 + 18 * f], 1, 0.72)
       cloudTop[k] = pack(t[0], t[1], t[2])
       cloudSide[k] = pack(s[0], s[1], s[2])
     }
-    const sa = tod === 'sunset' ? [255, 170, 110] : tod === 'night' ? [70, 110, 190] : [120, 190, 236]
-    const sb = tod === 'sunset' ? [255, 226, 170] : tod === 'night' ? [170, 200, 240] : [236, 250, 255]
-    const fm = tod === 'sunset' ? [255, 226, 214] : tod === 'night' ? [110, 140, 200] : [240, 252, 255]
+    const sa = mix3([120, 190, 236], [255, 170, 110], [70, 110, 190])
+    const sb = mix3([236, 250, 255], [255, 226, 170], [170, 200, 240])
+    const fm = mix3([240, 252, 255], [255, 226, 214], [110, 140, 200])
     sparkA = pack(sa[0], sa[1], sa[2])
     sparkB = pack(sb[0], sb[1], sb[2])
     foamCol = pack(fm[0], fm[1], fm[2])
     for (let k = 0; k < NYM; k++) {
       const pale = k === YM_SAIL || k === 12 || k === 7 || k === YM_HULL
-      const c = grade(YACHT_COL[k], tod, tod === 'night' ? (pale ? 0.22 : 0.32) : tod === 'sunset' ? 0.42 : 0)
-      const shades = [
+      // the chapel and the temple take the light as the ground does, a little less, so they stand out from it
+      const stone = k >= YM_TRAV && k <= YM_OCHRE
+      let c = stone ? gradeT(YACHT_COL[k], 0.8, 0.85) : gradeT(YACHT_COL[k], 0.42, pale ? 0.22 : 0.32)
+      // the fountains are lit from under the water at night
+      if (k === YM_SPRAY) c = toward(c, [196, 232, 255], lampK * 0.8)
+      let shades = [
         [c[0] * 0.6, c[1] * 0.66, c[2] * 0.8],
         [c[0] * 0.84, c[1] * 0.86, c[2] * 0.92],
         c,
         [c[0] * 1.07 + 10, c[1] * 1.07 + 9, c[2] * 1.05 + 6],
       ]
+      // a lamp gives its own light, the same from every side and at any hour
+      if (k >= YM_LAMP) shades = [YACHT_COL[k], YACHT_COL[k], YACHT_COL[k], YACHT_COL[k]]
+      // a boat's windows and open hatch glow with the cabin lamp
+      if (k === YM_WINDOW) shades = shades.map((s) => toward(s, [255, 190, 100], lampK * 0.9))
       for (let s = 0; s < 4; s++) yachtPal[k * 4 + s] = pack(shades[s][0], shades[s][1], shades[s][2])
     }
     for (let k = 0; k < LIFE_COL.length; k++) {
-      const c = grade(LIFE_COL[k], tod, tod === 'night' ? 0.3 : tod === 'sunset' ? 0.4 : 0)
+      const c = gradeT(LIFE_COL[k], 0.4, 0.3)
       lifePal[k] = pack(c[0], c[1], c[2])
     }
     const flames = [[255, 252, 224], [255, 224, 120], [255, 164, 44], [246, 96, 20], [176, 48, 26], [96, 34, 40]]
     for (let i = 0; i < 6; i++) flamePal[i] = pack(flames[i][0], flames[i][1], flames[i][2])
-    const tr = [grade([255, 255, 255], tod, 0.8), grade([214, 232, 250], tod, 0.8), grade([170, 204, 240], tod, 0.8)]
+    const tr = [gradeT([255, 255, 255], 0.8, 0.8), gradeT([214, 232, 250], 0.8, 0.8), gradeT([170, 204, 240], 0.8, 0.8)]
     for (let i = 0; i < 3; i++) trailPal[i] = pack(tr[i][0], tr[i][1], tr[i][2])
     // sky: from the horizon up
-    const skyA = tod === 'sunset' ? [255, 198, 132] : tod === 'night' ? [36, 56, 110] : [198, 232, 250]
-    const skyM = tod === 'sunset' ? [238, 122, 130] : tod === 'night' ? [18, 28, 70] : [122, 190, 240]
-    const skyB = tod === 'sunset' ? [84, 68, 150] : tod === 'night' ? [7, 10, 34] : [62, 142, 222]
+    const skyA = mix3([198, 232, 250], [255, 198, 132], [36, 56, 110])
+    const skyM = mix3([122, 190, 240], [238, 122, 130], [18, 28, 70])
+    const skyB = mix3([62, 142, 222], [84, 68, 150], [7, 10, 34])
+    const star = [232, 238, 255]
     for (let i = 0; i < NSKY; i++) {
       const f = i / (NSKY - 1)
       const a = f < 0.5 ? skyA : skyM
       const b = f < 0.5 ? skyM : skyB
       const g = f < 0.5 ? f * 2 : f * 2 - 1
-      skyPal[i] = pack(a[0] + (b[0] - a[0]) * g, a[1] + (b[1] - a[1]) * g, a[2] + (b[2] - a[2]) * g)
+      const c = [a[0] + (b[0] - a[0]) * g, a[1] + (b[1] - a[1]) * g, a[2] + (b[2] - a[2]) * g]
+      skyPal[i] = pack(c[0], c[1], c[2])
+      const st = toward(c, star, moonK)
+      starPal[i] = pack(st[0], st[1], st[2])
     }
-    const hz = tod === 'sunset' ? [250, 182, 134] : tod === 'night' ? [28, 44, 92] : [188, 224, 246]
+    const hz = mix3([188, 224, 246], [250, 182, 134], [28, 44, 92])
     hazeCol = pack(hz[0], hz[1], hz[2])
-    const cu = grade([138, 160, 200], tod, tod === 'night' ? 0.72 : 1)
+    const cu = gradeT([138, 160, 200], 1, 0.72)
     cloudUnder = pack(cu[0], cu[1], cu[2])
-    const sc2 = tod === 'night' ? [232, 238, 255] : [255, 244, 200]
-    const sg = tod === 'night' ? [70, 96, 160] : [255, 222, 150]
-    sunCol = pack(sc2[0], sc2[1], sc2[2])
-    sunGlow = pack(sg[0], sg[1], sg[2])
-    if (tod === 'sunset') { sunX = 0.95; sunY = 0.5 } else if (tod === 'night') { sunX = 0.3; sunY = 0.42 } else { sunX = 0.5; sunY = 0.32 }
+    sunCol = pack(255, 244, 200)
+    sunGlow = pack(255, 222, 150)
+    moonCol = pack(star[0], star[1], star[2])
+    moonGlow = pack(70, 96, 160)
+    sunX = mixN(0.5, 0.95, 0.3)
+    sunY = mixN(0.32, 0.5, 0.42)
+    cockpitSun = mixPacked(SUN_DAY, SUN_SUNSET, SUN_NIGHT)
+    cockpitPower = mixN(1, 1.1, 0.45)
+    smokeNight = mixN(1, 1, 0.55)
+    jetLitAt = mixN(0.9, 0.9, 0.74)
+    jetDimAt = mixN(0.66, 0.66, 0.4)
   }
 
   // ── the world: a height and a material per ground pixel
@@ -975,8 +1429,14 @@ export function createScene(initial) {
   // height az, at radius r with angular speed w and phase ph.
   const birds = []
   // what a cell is part of, so one layout never runs over another:
-  // 1 a house and its yard · 2 a villa garden · 3 a lakeside terrace, promenade or path
+  // 1 a house and its yard · 2 a villa garden · 3 a lakeside terrace, promenade, path or the chapel's
+  // garden · 4 a monument: the chapel or the temple
   const parkMap = new Uint8Array(N * N)
+  // the chapel and the temple: the middle of each, its floor and the way it faces (null if none would
+  // fit), and how high they stand over each cell of their footprints, for the plane, the bombs and the camera
+  let chapel = null
+  let temple = null
+  const monumentTop = new Map()
   let gardenN = 0
   let flowerN = 0
 
@@ -1114,6 +1574,10 @@ export function createScene(initial) {
     placeDocks()
     placeViewpoints(rnd)
     placeWildflowers(rnd)
+    monumentTop.clear()
+    placeChapel()
+    placeTemple()
+    placeLamps()
     placeBoats(rnd)
     placeLife(rnd)
     placeBirds(mulberry32((p.seed | 0) * 4513 + 29)) // its own random stream, so the clouds stay put
@@ -1130,6 +1594,8 @@ export function createScene(initial) {
       houses: houses.length,
       gardens: gardenN,
       viewpoints: views.length,
+      chapel: chapel ? [chapel.x | 0, chapel.y | 0] : null,
+      temple: temple ? [temple.x | 0, temple.y | 0] : null,
       props: props.length,
       flowers: flowerN,
       spawn: [spawnX | 0, spawnY | 0],
@@ -2007,6 +2473,320 @@ export function createScene(initial) {
   const NEAR_SHIFT = 4 // the near-a-house grid is in squares of 16 cells
   const NEAR_N = N >> NEAR_SHIFT
   const nearHouse = new Uint8Array(NEAR_N * NEAR_N)
+  // The chapel and the temple each stand square to the map; (a, f) are across and forward of the middle
+  // cell (cx, cy), forward being the way the door or the niche faces (yaw).
+  const turned = (cx, cy, yaw) => {
+    const c = Math.round(Math.cos(yaw))
+    const s = Math.round(Math.sin(yaw))
+    return (a, f) => (((cy + a * s - f * c) & NM) << NSHIFT) | ((cx + a * c + f * s) & NM)
+  }
+  /** grass, trees or wild flowers that nothing has taken yet */
+  const openLand = (o) => {
+    const m = matMap[o]
+    return !houseMap[o] && !parkMap[o] && ((m >= 6 && m <= 8) || isTree(m) || BLOOM[m] === 1)
+  }
+  const mid = (h) => [h.x + h.w / 2, h.y + h.d / 2]
+  const isVilla = (h) => h.w * h.d >= 120 // a townhouse is at most 9 by 10, a villa at least 11 by 12
+  /** the way from (cx, cy) to the middle of a house, as the nearest of the four map directions */
+  const facing = (cx, cy, hx, hy) => {
+    const dx = wrapDelta(hx, cx + 0.5)
+    const dy = wrapDelta(hy, cy + 0.5)
+    return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? Math.PI / 2 : -Math.PI / 2) : dy > 0 ? Math.PI : 0
+  }
+  /** a front facing −x or −y is turned to the sun (see voxBegin's light), and is worth this much more */
+  const sunward = (yaw) => (Math.sin(yaw) < -0.5 || Math.cos(yaw) > 0.5 ? 5 : 0)
+  /** a gravel path from (x, y) towards the middle of a house, until it meets its yard; how many cells it laid */
+  function gravelPath(x, y, hx, hy, lastH) {
+    let n = 0
+    for (let step = 0; step < 90; step++) {
+      const o = ((y & NM) << NSHIFT) | (x & NM)
+      if (houseMap[o] || parkMap[o] === 1 || parkMap[o] === 2) break
+      const m = matMap[o]
+      if (parkMap[o] !== 3) {
+        if (m < 4 || isBuilt(m) || m === 25 || m === 26 || m === 34 || parkMap[o] === 4 || Math.abs(floorMap[o] - lastH) > 4) break
+        matMap[o] = (x + y) & 1 ? 4 : 5
+        heightMap[o] = floorMap[o]
+        parkMap[o] = 3
+        n++
+      }
+      lastH = floorMap[o]
+      const dx = Math.round(wrapDelta(hx, x))
+      const dy = Math.round(wrapDelta(hy, y))
+      if (dx === 0 && dy === 0) break
+      if (Math.abs(dx) > Math.abs(dy) || (Math.abs(dx) === Math.abs(dy) && step & 1)) x += Math.sign(dx)
+      else y += Math.sign(dy)
+    }
+    return n
+  }
+  /** a monument's own cells: a stone floor nobody walks on, and how high it stands over each */
+  function monumentCell(o, base, M, a, f) {
+    heightMap[o] = floorMap[o] = base
+    matMap[o] = 51
+    parkMap[o] = 4
+    monumentTop.set(o, base + Math.ceil(monumentHeight(M, a, f)))
+  }
+
+  // The chapel: one on the map, a short walk from a group of villas (its middle not closer than 24 to any
+  // house, near as many villas as it can be, and near the start), its door towards the nearest of them
+  // and, where it can be, to the sun.
+  // It stands in a walled garden in the Italian manner: a low box hedge all round, a clipped lawn about
+  // the chapel, and before its door a paved square and then a parterre down to the gate: gravel walks,
+  // beds of lawn edged with box with a clipped cone in each, and a pair of long pools. A lamp at the
+  // square's front corners and two by the gate, a cypress either side of it outside, and a gravel path
+  // on to the villa's yard. The trees near the hedge are cleared. It takes nothing from the random
+  // stream, so the rest of the map stays as it was.
+  const GARDEN_A = 12 // the hedge runs 12 across from the chapel's middle …
+  const GARDEN_B = -8 // … 8 behind it, and in front at the gate, as far as the garden's bands reach
+  const CHAPEL_GARDENS = [
+    { front: 30, bands: [['bed', 6], ['walk', 1], ['pool', 5], ['walk', 1], ['bed', 4]] },
+    { front: 24, bands: [['bed', 5], ['walk', 1], ['pool', 5]] },
+    { front: 19, bands: [['bed', 6]] },
+  ]
+  /** what is at (a, f) of the chapel's garden G */
+  function chapelPlan(G, a, f) {
+    const A = Math.abs(a)
+    if (A === GARDEN_A || f === GARDEN_B || f === G.front) return f === G.front && A <= 1 ? 'walk' : 'hedge'
+    if (A <= 5 && f >= -5 && f <= 6) return 'chapel'
+    if (A <= 4 && f >= 7 && f <= CH_FORE) return 'square'
+    // a walk inside the hedge all round, and one from the square to the gate
+    if (A === GARDEN_A - 1 || f === GARDEN_B + 1 || f === G.front - 1 || (A <= 1 && f > CH_FORE)) return 'walk'
+    if (f <= CH_FORE) return 'lawn'
+    let f0 = Math.floor(CH_FORE) + 1
+    for (const [kind, n] of G.bands) {
+      if (f < f0 + n) {
+        const edge = A === 2 || A === GARDEN_A - 2 || f === f0 || f === f0 + n - 1
+        if (kind === 'walk') return 'walk'
+        if (kind === 'pool') return edge ? 'rim' : 'water'
+        if (edge) return 'hedge'
+        return A === 6 && f === f0 + (n >> 1) ? 'cone' : 'lawn'
+      }
+      f0 += n
+    }
+    return 'walk'
+  }
+  function placeChapel() {
+    chapel = null
+    let best = null
+    let bestScore = -1e9
+    for (const h of houses) {
+      if (!isVilla(h)) continue
+      const [hx, hy] = mid(h)
+      for (let k = 0; k < 16; k++) {
+        for (const r of [36, 44, 52, 60]) {
+          const cx = Math.floor(hx + Math.cos((k * Math.PI) / 8) * r) & NM
+          const cy = Math.floor(hy + Math.sin((k * Math.PI) / 8) * r) & NM
+          let near = 0
+          let ok = true
+          for (const o of houses) {
+            const [ox, oy] = mid(o)
+            const d2 = wrapDelta(ox, cx) ** 2 + wrapDelta(oy, cy) ** 2
+            if (d2 < 24 * 24) { ok = false; break }
+            if (isVilla(o) && d2 < 90 * 90) near++
+          }
+          if (!ok) continue
+          const yaw = facing(cx, cy, hx, hy)
+          const score0 = near * 10 + sunward(yaw) - Math.hypot(wrapDelta(cx, spawnX), wrapDelta(cy, spawnY)) / 25
+          // the biggest garden that fits here
+          for (let gi = 0; gi < CHAPEL_GARDENS.length; gi++) {
+            const score = score0 + (CHAPEL_GARDENS.length - 1 - gi) * 4
+            if (score <= bestScore) break
+            const base = chapelSite(cx, cy, yaw, CHAPEL_GARDENS[gi])
+            if (base < 0) continue
+            bestScore = score
+            best = { cx, cy, yaw, base, hx, hy, near, G: CHAPEL_GARDENS[gi] }
+            break
+          }
+        }
+      }
+    }
+    if (!best) {
+      worldLog.warn('no room for the chapel')
+      return
+    }
+    const { cx, cy, yaw, base, hx, hy, G } = best
+    const cell = turned(cx, cy, yaw)
+    const M = MONUMENTS.chapel
+    let cones = 0
+    for (let f = GARDEN_B; f <= G.front; f++) {
+      for (let a = -GARDEN_A; a <= GARDEN_A; a++) {
+        const o = cell(a, f)
+        const what = chapelPlan(G, a, f)
+        let m = M_LAWN
+        let h = base
+        if (what === 'chapel') { monumentCell(o, base, M, a, f); continue }
+        if (what === 'square') m = Math.abs(a) === 4 || f === Math.floor(CH_FORE) ? 52 : 51 // a darker border
+        else if (what === 'walk') m = (a + f) & 1 ? 4 : 5
+        else if (what === 'hedge') { m = M_HEDGE; h = base + 1 }
+        else if (what === 'rim') { m = M_STONE; h = base + 1 }
+        else if (what === 'water') m = M_POOL
+        else if (what === 'cone') { m = 36; h = base + 3; cones++ }
+        matMap[o] = m
+        heightMap[o] = floorMap[o] = h
+        parkMap[o] = 3
+      }
+    }
+    // the trees near the hedge are cleared, to a clearing of grass round the garden
+    for (let f = GARDEN_B - 9; f <= G.front + 9; f++) {
+      for (let a = -GARDEN_A - 9; a <= GARDEN_A + 9; a++) {
+        const o = cell(a, f)
+        if (!parkMap[o] && !houseMap[o] && isTree(matMap[o])) {
+          heightMap[o] = floorMap[o]
+          matMap[o] = 6
+        }
+      }
+    }
+    // a lamp at each front corner of the square and either side of the gate, a cypress outside it
+    const at = (a, f) => [cx + 0.5 + a * Math.round(Math.cos(yaw)) + f * Math.round(Math.sin(yaw)), cy + 0.5 + a * Math.round(Math.sin(yaw)) - f * Math.round(Math.cos(yaw))]
+    for (const [a, f] of [[-4, Math.floor(CH_FORE)], [4, Math.floor(CH_FORE)], [-2, G.front - 1], [2, G.front - 1]]) {
+      const [x, y] = at(a, f)
+      props.push({ kind: P_LAMP, x, y, z: base, yaw, alive: true })
+    }
+    for (const a of [-3, 3]) {
+      const o = cell(a, G.front + 1)
+      if (!openLand(o) || Math.abs(floorMap[o] - base) > 2) continue
+      matMap[o] = 34
+      heightMap[o] = floorMap[o] + 8 + (a > 0 ? 1 : 0)
+    }
+    const [px, py] = at(0, G.front + 1)
+    const pathN = gravelPath(Math.floor(px), Math.floor(py), hx, hy, base)
+    chapel = { x: cx + 0.5, y: cy + 0.5, z: base, yaw }
+    monumentModel(M, 0)
+    monumentModel(M, 1)
+    worldLog.info('chapel', {
+      at: [cx, cy], villas: best.near, garden: G.front - GARDEN_B + 1, cones, path: pathN,
+      fromSpawn: Math.round(Math.hypot(wrapDelta(cx, spawnX), wrapDelta(cy, spawnY))),
+    })
+  }
+  /** the floor the chapel and its garden G would stand on at (cx, cy), the door towards yaw; -1 if the ground will not do */
+  function chapelSite(cx, cy, yaw, G) {
+    const cell = turned(cx, cy, yaw)
+    const base = floorMap[(cy << NSHIFT) | cx]
+    if (base < 2) return -1
+    for (let f = GARDEN_B; f <= G.front + 1; f++) {
+      for (let a = -GARDEN_A; a <= GARDEN_A; a++) {
+        const o = cell(a, f)
+        if (!openLand(o)) return -1
+        const inner = Math.abs(a) <= 6 && f >= -6 && f <= CH_FORE
+        if (Math.abs(floorMap[o] - base) > (inner ? 2 : 3)) return -1
+      }
+    }
+    return base
+  }
+
+  // The temple: one on the map, a garden folly on the edge of a wood, far from the chapel (300 or more),
+  // not closer than 18 to any house and a short walk from a villa, its niche towards it (and, where it can
+  // be, to the sun). Trees behind and
+  // beside it are kept, so it stands against the wood; those in front are cleared to a lawn, with a paved
+  // step before it and a gravel path on to the villa. Like the chapel it takes nothing from the random stream.
+  function placeTemple() {
+    temple = null
+    let best = null
+    let bestScore = -1e9
+    for (const h of houses) {
+      if (!isVilla(h)) continue
+      const [hx, hy] = mid(h)
+      for (let k = 0; k < 16; k++) {
+        for (const r of [24, 30, 36]) {
+          const cx = Math.floor(hx + Math.cos((k * Math.PI) / 8) * r) & NM
+          const cy = Math.floor(hy + Math.sin((k * Math.PI) / 8) * r) & NM
+          if (chapel && Math.hypot(wrapDelta(chapel.x, cx), wrapDelta(chapel.y, cy)) < 300) continue
+          let near = 0
+          let ok = true
+          for (const o of houses) {
+            const [ox, oy] = mid(o)
+            const d2 = wrapDelta(ox, cx) ** 2 + wrapDelta(oy, cy) ** 2
+            if (d2 < 18 * 18) { ok = false; break }
+            if (isVilla(o) && d2 < 90 * 90) near++
+          }
+          if (!ok) continue
+          const yaw = facing(cx, cy, hx, hy)
+          const site = templeSite(cx, cy, yaw)
+          if (!site) continue
+          // near villas, against a wood, and not too far from the start
+          const score = near * 10 + sunward(yaw) + Math.min(site.wood, 80) / 8 - Math.hypot(wrapDelta(cx, spawnX), wrapDelta(cy, spawnY)) / 25
+          if (score <= bestScore) continue
+          bestScore = score
+          best = { cx, cy, yaw, base: site.base, wood: site.wood, hx, hy, near }
+        }
+      }
+    }
+    if (!best) {
+      worldLog.warn('no room for the temple')
+      return
+    }
+    const { cx, cy, yaw, base, hx, hy } = best
+    const cell = turned(cx, cy, yaw)
+    const M = MONUMENTS.temple
+    for (let f = -3; f <= 24; f++) {
+      for (let a = -9; a <= 9; a++) {
+        const o = cell(a, f)
+        const A = Math.abs(a)
+        if (A <= 5 && f >= -2 && f <= 2) monumentCell(o, base, M, a, f)
+        else if (A <= 5 && f >= 3 && f <= 4) {
+          // the paved step before it
+          heightMap[o] = floorMap[o] = base
+          matMap[o] = f === 4 || A === 5 ? 52 : 51
+          parkMap[o] = 3
+        } else if (A <= 7 && f >= 3 && f <= 9 && !parkMap[o] && !houseMap[o]) {
+          // a lawn before it, a gravel walk up the middle
+          heightMap[o] = floorMap[o] = base
+          matMap[o] = A === 0 ? (f & 1 ? 4 : 5) : M_LAWN
+          parkMap[o] = 3
+        } else if (!parkMap[o] && !houseMap[o] && isTree(matMap[o]) && (f >= 3 || A <= 6)) {
+          heightMap[o] = floorMap[o] // the trees in front are cleared, so it can be seen from a way off
+          matMap[o] = 6
+        }
+      }
+    }
+    const c = Math.round(Math.cos(yaw))
+    const s = Math.round(Math.sin(yaw))
+    const pathN = gravelPath(cx + 10 * s, cy - 10 * c, hx, hy, base)
+    temple = { x: cx + 0.5, y: cy + 0.5, z: base, yaw }
+    monumentModel(M, 0)
+    monumentModel(M, 1)
+    worldLog.info('temple', {
+      at: [cx, cy], villas: best.near, wood: best.wood, path: pathN,
+      fromSpawn: Math.round(Math.hypot(wrapDelta(cx, spawnX), wrapDelta(cy, spawnY))),
+      fromChapel: chapel ? Math.round(Math.hypot(wrapDelta(chapel.x, cx), wrapDelta(chapel.y, cy))) : null,
+    })
+  }
+  /** the floor the temple would stand on at (cx, cy), the niche towards yaw, and how much wood is behind
+   * and beside it; null if the ground will not do */
+  function templeSite(cx, cy, yaw) {
+    const cell = turned(cx, cy, yaw)
+    const base = floorMap[(cy << NSHIFT) | cx]
+    if (base < 2) return null
+    for (let f = -3; f <= 10; f++) {
+      for (let a = -8; a <= 8; a++) {
+        const o = cell(a, f)
+        if (!openLand(o)) return null
+        const inner = Math.abs(a) <= 6 && f <= 5
+        if (Math.abs(floorMap[o] - base) > (inner ? 2 : 3)) return null
+      }
+    }
+    let wood = 0
+    for (let f = -10; f <= 2; f++) {
+      for (let a = -12; a <= 12; a++) {
+        if ((f < -3 || Math.abs(a) > 8) && isTree(matMap[cell(a, f)])) wood++
+      }
+    }
+    return { base, wood }
+  }
+
+  // a garden lamp by the end of every bench, a little behind it, so the gardens, the terraces and the
+  // promenades are lit at night. It takes nothing from the random stream: the rest stays as it was.
+  function placeLamps() {
+    const n = props.length
+    for (let i = 0; i < n; i++) {
+      const s = props[i]
+      if (s.kind !== P_BENCH) continue
+      // across the bench is (cos, sin) of its yaw, the way the sitter faces (sin, −cos)
+      const cs = Math.cos(s.yaw)
+      const sn = Math.sin(s.yaw)
+      props.push({ kind: P_LAMP, x: s.x + 1.9 * cs - 0.3 * sn, y: s.y + 1.9 * sn + 0.3 * cs, z: s.z, yaw: s.yaw, alive: true })
+    }
+  }
+
   function placeWildflowers(rnd) {
     flowerN = 0
     const STEP = 6
@@ -2409,7 +3189,11 @@ export function createScene(initial) {
   function rollOf(j) {
     return j.roll + spinOf(j) + j.joltR
   }
-  const groundAt = (x, y) => heightMap[(((y | 0) & NM) << NSHIFT) | ((x | 0) & NM)]
+  // the ground's height, a monument's over its footprint (the plane clears it and the bombs burst on it)
+  const groundAt = (x, y) => {
+    const o = (((y | 0) & NM) << NSHIFT) | ((x | 0) & NM)
+    return parkMap[o] === 4 ? Math.max(heightMap[o], monumentTop.get(o) || 0) : heightMap[o]
+  }
   /** the tallest ground under a jet and along the next stretch of its path */
   function groundAhead(j, speed) {
     const sn = Math.sin(j.yaw)
@@ -2474,10 +3258,9 @@ export function createScene(initial) {
     p = { ...next }
     if (prev.seed !== p.seed) { worldDirty = 0.2; reseat = true }
     if (prev.land !== p.land) worldDirty = 0.2
-    if (
-      prev.timeOfDay !== p.timeOfDay || prev.bodyColor !== p.bodyColor ||
-      prev.accentColor !== p.accentColor || prev.canopyColor !== p.canopyColor
-    ) rebuildPalettes()
+    // a new time of day is eased to, like N
+    if (prev.timeOfDay !== p.timeOfDay) dayGoal = TOD_PHASE[p.timeOfDay] ?? 0
+    if (prev.bodyColor !== p.bodyColor || prev.accentColor !== p.accentColor || prev.canopyColor !== p.canopyColor) rebuildPalettes()
     if (prev.intro !== p.intro && p.intro) { introT = 0; burn = 0 }
     if (prev.view !== p.view) viewTarget = viewIndex(p.view)
     if (prev.seed !== p.seed || prev.land !== p.land) {
@@ -2665,7 +3448,7 @@ export function createScene(initial) {
           wreckHouse(hid, wx, wy)
         }
         const m = matMap[o]
-        if (m < 4) continue
+        if (m < 4 || parkMap[o] === 4) continue // the chapel and the temple stand, whatever falls on them
         const fall = Math.round((1 - Math.sqrt(d2) / r) * (water ? 2 : 9))
         heightMap[o] = Math.max(isBuilt(m) ? houses[hid - 1]?.base || 0 : 0, heightMap[o] - fall)
         if (d2 < (r * 0.55) * (r * 0.55)) matMap[o] = d2 < 8 ? 24 : 23
@@ -2704,7 +3487,7 @@ export function createScene(initial) {
   }
   function standable(x, y) {
     const o = ((y & NM) << NSHIFT) | (x & NM)
-    if (houseMap[o]) return false
+    if (houseMap[o] || parkMap[o] === 4) return false // a house, the chapel, the temple
     const m = matMap[o]
     if (isTrunk(m) || m === 34) return false // tree trunk or cypress; the canopy can be walked under
     if (isBuilt(m)) return false
@@ -3407,6 +4190,15 @@ export function createScene(initial) {
         }
       }
     }
+    // dusk or dawn: the light moves at an even pace, eased at both ends, and every palette follows it
+    // (the cockpit is not repainted: it takes the light as a tone when it is laid on)
+    if (dayLin !== dayGoal) {
+      const d = dt / DAY_FADE
+      dayLin = dayGoal > dayLin ? Math.min(dayGoal, dayLin + d) : Math.max(dayGoal, dayLin - d)
+      setPhase(easeDay(dayLin))
+      rebuildPalettes(false)
+      if (dayLin === dayGoal) NIGHT_LOG.info(dayGoal > 0.5 ? 'night has fallen' : 'day has come')
+    }
     if (!cockpit && W > 0) {
       cockpitDue -= dt
       if (cockpitDue <= 0) cockpitArt()
@@ -3747,7 +4539,7 @@ export function createScene(initial) {
     holeR: 0, holeCx: 0, holeCy: 0, cdx: 0, cdy: 0, csx: 0, csy: 0, tW1: 0, tW2: 0, tF: 0, sx: 0, sy: 0,
     isc: 0, reach: 0, blooms: false, nShadow: 0, viewDist: 0, fogStart: 0, n: 0,
     // colours the GPU needs that are not in the material palettes
-    hazeCol: 0, cloudUnder: 0, foamCol: 0, sparkA: 0, sparkB: 0, shutterLit: 0, shutterShade: 0,
+    hazeCol: 0, cloudUnder: 0, foamCol: 0, sparkA: 0, sparkB: 0, shutterLit: 0, shutterShade: 0, winLit: 0, winOn: 0,
     topLit, topShade, sideLit, sideShade, cloudTop, cloudSide, shadowMask, sjx, sjy, srx, sry, sfx, sfy, sic,
   }
   function worldFrame() {
@@ -3821,6 +4613,8 @@ export function createScene(initial) {
     f.sparkB = sparkB
     f.shutterLit = shutterLit
     f.shutterShade = shutterShade
+    f.winLit = winLit
+    f.winOn = winOn
 
     // start where the tallest thing sits on the bottom row; stop when the sea leaves the top
     // of the frame, or at the view distance once there is a horizon
@@ -4099,13 +4893,20 @@ export function createScene(initial) {
         if (yR < cY) {
           if (yR < rowLo) yR = rowLo
           if (WINDOW_MAT[mat] === 1) {
-            // a villa's windows: a band of green shutters on each floor, below the cornice
+            // a villa's windows: a band of green shutters on each floor, below the cornice. At night
+            // some are lit from inside, each window (this cell, this floor) at its own moment.
             let sh = shade ? shutterShade : shutterLit
-            if (fog > 0) sh = mixHaze(sh, keep, fog)
+            let lit = winLit
+            if (fog > 0) {
+              sh = mixHaze(sh, keep, fog)
+              lit = mixHaze(lit, keep, fog)
+            }
+            const on = winOn
             for (let y = yR, o = yR * W + px; y < cY; y++, o += W) {
               if (_fb[o] !== 0) continue
               const k = h - (Rp - y) / mp - 0.8
-              _fb[o] = k > 0 && k % FLOOR_H < 1.5 ? sh : side
+              if (k > 0 && k % FLOOR_H < 1.5) _fb[o] = on > 0 && hash8(idx * 4 + ((k / FLOOR_H) | 0)) < on ? lit : sh
+              else _fb[o] = side
               _zb[o] = v
             }
           } else {
@@ -4137,37 +4938,41 @@ export function createScene(initial) {
     const horizon = q > 1e-7 ? vCy - (vS * vTan) / q : -1e9
     const hz = horizon > H ? H : Math.floor(horizon)
     const focal = q > 1e-7 ? vS / q : 1e9
-    const tod = p.timeOfDay
-    // sun or moon, low over the horizon, opposite the shadows
-    if (hz > 0 && tod !== 'day') {
-      const sl = Math.sqrt(sunX * sunX + sunY * sunY) || 1
-      const dx = -sunX / sl
-      const dy = -sunY / sl
-      const du = dx * vCos - dy * vSin
-      const dv = -(dx * vSin + dy * vCos)
-      if (dv > 0.2) {
-        const rad = tod === 'sunset' ? W * 0.05 : W * 0.022
-        const cxs = vCx + (focal * du) / dv
-        const cys = horizon - (focal * (tod === 'sunset' ? 0.12 : 0.3)) / dv
-        const reach = rad * 1.9
-        const xa = Math.max(0, Math.floor(cxs - reach))
-        const xb = Math.min(W - 1, Math.ceil(cxs + reach))
-        const ya = Math.max(0, Math.floor(cys - reach))
-        const yb = Math.min(hz - 1, Math.ceil(cys + reach))
-        for (let y = ya; y <= yb; y++) {
-          for (let x = xa; x <= xb; x++) {
-            const o = y * W + x
-            if (_fb[o] !== 0) continue
-            const d = Math.sqrt((x - cxs) * (x - cxs) + (y - cys) * (y - cys)) / rad
-            if (d < 1) _fb[o] = sunCol
-            else if (d < 1.9 && (1.9 - d) * 14 > BAYER[((y & 3) << 2) | (x & 3)]) _fb[o] = sunGlow
-          }
+    // a disc in the sky towards (-dx, -dy), elev above the horizon, its glow dithered round it;
+    // k (0…1) thins the whole of it to nothing
+    const disc = (dx, dy, rad, elev, core, halo, k) => {
+      const sl = Math.sqrt(dx * dx + dy * dy) || 1
+      const du = (-dx * vCos + dy * vSin) / sl
+      const dv = (dx * vSin + dy * vCos) / sl
+      if (dv <= 0.2 || k <= 0) return
+      const lvl = k * 16
+      const cxs = vCx + (focal * du) / dv
+      const cys = horizon - (focal * elev) / dv
+      const reach = rad * 1.9
+      const xa = Math.max(0, Math.floor(cxs - reach))
+      const xb = Math.min(W - 1, Math.ceil(cxs + reach))
+      const ya = Math.max(0, Math.floor(cys - reach))
+      const yb = Math.min(hz - 1, Math.ceil(cys + reach))
+      for (let y = ya; y <= yb; y++) {
+        for (let x = xa; x <= xb; x++) {
+          const o = y * W + x
+          if (_fb[o] !== 0) continue
+          const b = BAYER[((y & 3) << 2) | (x & 3)]
+          const d = Math.sqrt((x - cxs) * (x - cxs) + (y - cys) * (y - cys)) / rad
+          if (d < 1) { if (lvl > b) _fb[o] = core }
+          else if (d < 1.9 && (1.9 - d) * 14 * k > b) _fb[o] = halo
         }
       }
     }
+    if (hz > 0) {
+      // the sun, big and low at dusk, sinking under the horizon as the night comes on (and up at dawn)
+      disc(sunX, sunY, W * 0.05, 0.12 + (DUSK - phase) * 0.5, sunCol, sunGlow, Math.min(1, tw[1] / DUSK_PEAK) * 1.3 - 0.15)
+      // the moon, small and high, opposite the shadows of the night
+      disc(0.3, 0.42, W * 0.022, 0.3, moonCol, moonGlow, moonK)
+    }
     const span = frameH * 0.75
     const starOff = ((vYaw * focal) | 0) & 4095
-    const stars = tod === 'night'
+    const stars = moonK > 0
     for (let y = rowLo; y < rowHi; y++) {
       let o = y * W
       o += colLo
@@ -4179,7 +4984,7 @@ export function createScene(initial) {
           const edge = (t - b - 0.7) * 3.4
           if (edge > 0 && edge * 16 > BAYER[((y & 3) << 2) | (x & 3)]) b++
           if (b >= NSKY) b = NSKY - 1
-          _fb[o] = stars && b > 1 && hash8(((x + starOff) & 4095) * 73 + y * 9973) < 2 ? sunCol : skyPal[b]
+          _fb[o] = stars && b > 1 && hash8(((x + starOff) & 4095) * 73 + y * 9973) < 2 ? starPal[b] : skyPal[b]
         }
       } else {
         for (let x = colLo; x < colHi; x++, o++) if (_fb[o] === 0) _fb[o] = hazeCol
@@ -4240,7 +5045,7 @@ export function createScene(initial) {
   function drawSmoke() {
     const _fb = fb
     const _zb = zbuf
-    const night = p.timeOfDay === 'night' ? 0.55 : 1
+    const night = smokeNight
     for (let i = 0; i < SMOKE_N; i++) {
       const o = i * SMOKE_F
       const life = smoke[o + 8]
@@ -4972,6 +5777,122 @@ export function createScene(initial) {
     }
   }
 
+  /**
+   * A lamp's light, added to what is there: strongest in the middle and gone r pixels out, in steps of
+   * a quarter dithered between, so it keeps the pixel look. a is its strength in the middle (0…1).
+   */
+  function glow(sx, sy, r, col, a) {
+    if (a <= 0.02 || r < 0.5) return
+    const R = Math.ceil(r)
+    const y0 = Math.max(rowLo, Math.floor(sy) - R)
+    const y1 = Math.min(rowHi - 1, Math.floor(sy) + R)
+    const x0 = Math.max(colLo, Math.floor(sx) - R)
+    const x1 = Math.min(colHi - 1, Math.floor(sx) + R)
+    const ir2 = 1 / (r * r)
+    const cr = col & 255
+    const cg = (col >> 8) & 255
+    const cb = (col >> 16) & 255
+    const _fb = fb
+    for (let y = y0; y <= y1; y++) {
+      const dy = y + 0.5 - sy
+      for (let x = x0; x <= x1; x++) {
+        const dx = x + 0.5 - sx
+        const d = 1 - (dx * dx + dy * dy) * ir2
+        if (d <= 0) continue
+        const w = Math.floor(a * d * d * 4 + BAYER[((y & 3) << 2) | (x & 3)] / 16) * 0.25
+        if (w <= 0) continue
+        const o = y * W + x
+        const bg = _fb[o]
+        const r1 = Math.min(255, (bg & 255) + cr * w)
+        const g1 = Math.min(255, ((bg >> 8) & 255) + cg * w)
+        const b1 = Math.min(255, ((bg >> 16) & 255) + cb * w)
+        _fb[o] = ((255 << 24) | (b1 << 16) | (g1 << 8) | r1) >>> 0
+      }
+    }
+  }
+
+  /** a lamp at a world point that is not a voxel: its glow, worldR across, unless the ground is in front */
+  function lampGlow(x, y, z, worldR, col, a) {
+    if (a <= 0.02 || !project(x, y, z)) return
+    const px = Math.floor(prX)
+    const py = Math.floor(prY)
+    if (px < colLo || py < rowLo || px >= colHi || py >= rowHi) return
+    if (zbuf[py * W + px] < prV - 1.5) return // a hill or a house is in front
+    glow(prX, prY, clamp(prM * worldR, 1.5, 9), col, a)
+  }
+
+  /**
+   * One lamp on the voxel object voxBegin set up, at (a, f, z) in its own units: a voxel of g in the lit
+   * material k, wherever nothing nearer hides it. True if any of it shows; prX, prY, prM and prV are
+   * then where its middle is.
+   */
+  function lampVox(a, f, z, k, g) {
+    if (f < yCut) return false
+    const a1 = a * yCH + z * ySH
+    const z1 = -a * ySH + z * yCH
+    const f1 = f * yCP - z1 * ySP
+    const z2 = f * ySP + z1 * yCP
+    const U = yOU + a1 * yAU + f1 * yFU
+    const V = yOV + a1 * yAV + f1 * yFV
+    const Wz = yOW + z2
+    const q = vQ
+    const den = 1 + q * V
+    if (den < 0.15) return false
+    const m = vS / den
+    prX = vCx + m * U
+    prY = vCy - m * (Wz + vTan * V)
+    prM = m
+    prV = V
+    const h = 0.5 * g * m
+    let x0 = Math.round(prX - h)
+    let x1 = Math.round(prX + h)
+    if (x1 <= x0) x1 = x0 + 1
+    let y0 = Math.round(prY - h)
+    let y1 = Math.round(prY + h)
+    if (y1 <= y0) y1 = y0 + 1
+    if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) return false
+    if (x0 < 0) x0 = 0
+    if (y0 < 0) y0 = 0
+    if (x1 > W) x1 = W
+    if (y1 > H) y1 = H
+    const key = q > 1e-6 ? U * U + (V + 1 / q) * (V + 1 / q) + (Wz - vTan / q) * (Wz - vTan / q) : V - vTan * Wz
+    const col = yachtPal[k * 4 + 2]
+    let shown = false
+    for (let yy = y0; yy < y1; yy++) {
+      for (let xx = x0, at = yy * W + x0; xx < x1; xx++, at++) {
+        if (zbuf[at] < V - 1 || key >= akey[at]) continue
+        akey[at] = key
+        fb[at] = col
+        jetMask[at] = 1
+        shown = true
+      }
+    }
+    if (x0 < yX0) yX0 = x0
+    if (x1 > yX1) yX1 = x1
+    if (y0 < yY0) yY0 = y0
+    if (y1 > yY1) yY1 = y1
+    return shown
+  }
+
+  // a boat's lights at night, all warm lanterns: one on each side a little forward of the middle, one
+  // on the stern and one at the top of the foremast. Each boat lights up at its own moment as the dusk deepens.
+  function drawBoatLamps(Y, idx) {
+    const on = lampOn(hash8(idx * 2654435 + 977))
+    if (on <= 0) return
+    const g = 0.35
+    const r = (wr) => clamp(prM * wr, 1.5, 8)
+    const fs = Y.L * 0.22
+    const ds = yachtDeck(Y, fs)
+    const hs = Math.max(0.3, yachtHalf(Y, fs, ds - 0.05)) + 0.1
+    for (const side of [1, -1]) {
+      if (lampVox(side * hs, fs, ds + 0.15, YM_LAMP, g)) glow(prX, prY, r(0.9), LAMP_WARM_GLOW, 0.4 * on)
+    }
+    const ft = -Y.L / 2 + 0.4
+    if (lampVox(0, ft, yachtDeck(Y, ft) + 0.4, YM_LAMP, g)) glow(prX, prY, r(1.4), LAMP_WARM_GLOW, 0.5 * on)
+    const M = Y.masts[0]
+    if (lampVox(0, M.f, M.h + 0.2, YM_LAMP, g)) glow(prX, prY, r(1), LAMP_WARM_GLOW, 0.35 * on)
+  }
+
   function drawYacht(b, x, y, idx) {
     const Y = YACHTS[b.kind] || YACHTS[0]
     const half = Y.L / 2
@@ -5031,6 +5952,7 @@ export function createScene(initial) {
     rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, rigN)
     // Enzo, out on deck: drawn with the boat, so the hull and the rig hide him where they should
     if (own && !firstPerson && lounge > 0) drawEnzoOut(Y)
+    if (lampK > 0) drawBoatLamps(Y, idx)
     voxEnd()
   }
 
@@ -5250,6 +6172,36 @@ export function createScene(initial) {
     }
   }
 
+  // The chapel and the temple, drawn first of everything that stands in the world, at a level of detail
+  // for how near they are. They write zbuf as the ground does, so what is behind them (props, boats, the
+  // person, the plane, lamps' glows) is hidden by them. The finest model is made a little at a time while
+  // the next one down is shown, so coming near costs no stall.
+  function drawMonuments() {
+    if (chapel) drawMonument(chapel, MONUMENTS.chapel)
+    if (temple) drawMonument(temple, MONUMENTS.temple)
+  }
+  function drawMonument(mo, M) {
+    const x = mo.x - N * Math.round((mo.x - cam.x) / N)
+    const y = mo.y - N * Math.round((mo.y - cam.y) / N)
+    if ((x - cam.x) ** 2 + (y - cam.y) ** 2 > 1100 * 1100 || !project(x, y, mo.z + M.mid)) return
+    const m = prM
+    const reach = M.reach * m + 4
+    if (prX < -reach || prX > W + reach || prY < -reach * 1.2 || prY > H + reach) return
+    ensureAkey()
+    let lod = m >= 9 ? 2 : m >= 2.2 ? 1 : 0
+    let model = null
+    if (lod === 2) model = monumentFine(M, 3)
+    else if (lod === 1) monumentFine(M, 1.5)
+    if (!model) {
+      lod = Math.min(lod, 1)
+      model = monumentModel(M, lod)
+    }
+    voxBegin(x, y, mo.z, mo.yaw, 0, 0, MON_LOD[lod])
+    yZW = true
+    rasterVox(model.A, model.F, model.Z, model.NA, model.NF, model.NZ, model.K, model.n)
+    voxEnd()
+  }
+
   const swingC = new Float32Array(5)
   const swingS = new Float32Array(5)
   // the statues, benches and urns, and the spray of each fountain: a jet from the spout falling in four arcs
@@ -5266,10 +6218,16 @@ export function createScene(initial) {
       const x = s.x - N * Math.round((s.x - cam.x) / N)
       const y = s.y - N * Math.round((s.y - cam.y) / N)
       if ((x - cam.x) ** 2 + (y - cam.y) ** 2 > 780 * 780 || !onScreen(x, y, s.z, 4)) continue
-      const M = PROPS[s.kind]
+      // at night the garden lamps come on, each at its own moment, and a soft light falls on the statues
+      const on = lampK > 0 && (s.kind === P_LAMP || s.kind <= 1) ? lampOn(hash8(((s.x * 8) | 0) * 7919 + ((s.y * 8) | 0))) : 0
+      const M = s.kind === P_LAMP && on > 0.4 ? LAMP_LIT : PROPS[s.kind]
       voxBegin(x, y, s.z, s.yaw, 0, 0, PROP_G)
       rasterVox(M.A, M.F, M.Z, M.NA, M.NF, M.NZ, M.K, M.n)
       voxEnd()
+      if (on > 0) {
+        if (s.kind === P_LAMP) lampGlow(x, y, s.z + LAMP_TOP, 1.9, LAMP_WARM_GLOW, 0.55 * on)
+        else lampGlow(x, y, s.z + 1.2, 1.7, LAMP_WARM_GLOW, 0.22 * on)
+      }
     }
     for (const f of fountains) {
       if (!f.alive) continue
@@ -5295,6 +6253,8 @@ export function createScene(initial) {
       voxBegin(x, y, f.z, 0, 0, 0, 0.2)
       rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, rigN)
       voxEnd()
+      // lit from under the water at night
+      if (lampK > 0) lampGlow(x, y, f.z + 0.5, 1.8, FOUNTAIN_GLOW, 0.32 * lampOn(hash8(((f.x * 8) | 0) * 7919 + ((f.y * 8) | 0))))
     }
   }
 
@@ -5547,9 +6507,8 @@ export function createScene(initial) {
     const ly = -sunY
     const lz = 1.1
     const ll = Math.sqrt(lx * lx + ly * ly + lz * lz)
-    const night = p.timeOfDay === 'night'
-    const litAt = night ? 0.74 : 0.9
-    const dimAt = night ? 0.4 : 0.66
+    const litAt = jetLitAt
+    const dimAt = jetDimAt
     const lit = (side) => {
       const nx = ax.ux + side * 0.4 * ax.rx
       const ny = ax.uy + side * 0.4 * ax.ry
@@ -5765,10 +6724,10 @@ export function createScene(initial) {
       const body = []
       const hot = []
       const metal = []
-      for (let t = 0; t < 9; t++) body.push(jetPal[1 + t])
-      for (let t = 0; t < 6; t++) hot.push(jetPal[17 + t])
-      for (let t = 0; t < 6; t++) metal.push(jetPal[33 + t])
-      cockpit = buildCockpit(W, H, { body, hot, metal, leather: [jetPal[50], jetPal[51]], pit: jetPal[52], wood: jetPal[56] })
+      for (let t = 0; t < 9; t++) body.push(jetPalDay[1 + t])
+      for (let t = 0; t < 6; t++) hot.push(jetPalDay[17 + t])
+      for (let t = 0; t < 6; t++) metal.push(jetPalDay[33 + t])
+      cockpit = buildCockpit(W, H, { body, hot, metal, leather: [jetPalDay[50], jetPalDay[51]], pit: jetPalDay[52], wood: jetPalDay[56] })
     }
     return cockpit
   }
@@ -5780,7 +6739,6 @@ export function createScene(initial) {
     const sn = Math.sin(lead.yaw)
     const cs = Math.cos(lead.yaw)
     // where the sun is from the seat: to one side or the other, ahead or behind
-    const tod = p.timeOfDay
     const sl = Math.sqrt(sunX * sunX + sunY * sunY) || 1
     const sunFront = (-sunX * sn + sunY * cs) / sl
     const sunSide = (-sunX * cs - sunY * sn) / sl
@@ -5803,8 +6761,9 @@ export function createScene(initial) {
       // light pours over the pilot's shoulder with the sun behind; the wing shades it with the sun ahead
       sunSide,
       sunReach: 0.72 - 0.28 * sunFront,
-      sunColor: tod === 'sunset' ? SUN_SUNSET : tod === 'night' ? SUN_NIGHT : SUN_DAY,
-      sunPower: tod === 'sunset' ? 1.1 : tod === 'night' ? 0.45 : 1,
+      sunColor: cockpitSun,
+      sunPower: cockpitPower,
+      tint: cockpitTint,
     })
   }
 
@@ -5849,6 +6808,7 @@ export function createScene(initial) {
     }
     drawGround()
     drawSky()
+    drawMonuments()
     drawTrails()
     drawSmoke()
     drawBombs()
@@ -5918,6 +6878,20 @@ export function createScene(initial) {
     toggleFootView,
     setWalk,
     board,
+    /** N: towards night, or back towards day (from wherever the light is now) */
+    toggleNight() {
+      dayGoal = dayGoal > 0.5 ? 0 : 1
+      NIGHT_LOG.info(dayGoal > 0.5 ? 'dusk' : 'dawn', { phase: Math.round(phase * 100) / 100 })
+    },
+    /** debugging: jump the light to where the change from day (0) to night (1) is s along */
+    setLight(s) {
+      dayLin = dayGoal = clamp(s, 0, 1)
+      setPhase(easeDay(dayLin))
+      rebuildPalettes(false)
+    },
+    /** heading for night (or there) */
+    get night() { return dayGoal > 0.5 },
+    get phase() { return phase },
     step,
     render,
     get width() { return W },

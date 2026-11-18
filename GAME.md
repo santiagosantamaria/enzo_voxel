@@ -107,6 +107,7 @@ Click (pointer down and up in under 0.2s) barrel-rolls the plane. Holding the po
 | V | Become the person | Back to the jet | Back to the jet. The boat stays as it is. |
 | E | — | Board the nearest boat within 48 | Step ashore if land is within 28 |
 | Space | Next flight view | Overhead ↔ first person | Isometric aerial ↔ first person |
+| N | Night, or back to day, over 9 seconds | Same | Same |
 | Click | Roll if short, throttle if held | — | — |
 | Pointer | Steers until a key is used | Ignored | Ignored |
 
@@ -141,7 +142,7 @@ Hint text at the bottom follows the mode. While sailing it says W starts, S stop
 | `chaseDistance` | 2.6 | Chase camera distance, in jet lengths. |
 | `chaseAngle` | 12 | Chase look-down, degrees. |
 | `chaseSize` | 0.19 | How large the jet is in the chase frame. |
-| `timeOfDay` | `day` | `day`, `sunset`, `night`. Recolors sky, sun, terrain grades. |
+| `timeOfDay` | `day` | `day`, `sunset`, `night`: the light the game starts in. A change eases there, like N. See "Day and night". |
 | `land` | 0.33 | Fraction of the map above water. |
 | `clouds` | 0.45 | How many of the generated cloud clusters are visible. |
 | `seed` | 7 | World seed, including wind direction. |
@@ -151,6 +152,25 @@ Hint text at the bottom follows the mode. While sailing it says W starts, S stop
 | `bodyColor`, `accentColor`, `canopyColor` | `#3254a0`, `#f6c022`, `#9ca2ac` | Recolor the plane's palette families: fuselage blue, wing yellow, metal (cowling, struts, engine). |
 
 `pixelSize`, `showHint`, and `touchControls` are React props, not scene params.
+
+## Day and night
+
+N turns the light towards night, or back towards day, from wherever it is. The change takes `DAY_FADE` (9) seconds and passes through dusk, so dawn is dusk played backwards. Lamps come on as the dusk deepens and go off at dawn.
+
+- **The phase.** `dayLin` moves at an even pace towards `dayGoal` (0 day, 1 night). `phase` is that, eased at both ends (`easeDay`). `todWeights(phase)` gives the weights of the day, sunset and night colours (`tw`): the day light turns to sunset light up to `DUSK` (0.45), where the sunset colours are `DUSK_PEAK` (85%) of the mix, then the sunset gives way to night. The `timeOfDay` param only says where the light starts (`sunset` is `DUSK`), and a new value eases there like N.
+- **Palettes.** Every colour that changes with the light is a mix of its day, sunset and night versions: `gradeT(c, aS, aN)` for graded colours, `mix3` and `mixN` for the sky, haze and other keyframes. `rebuildPalettes(false)` runs every frame of a fade (about 0.15 ms), and the GPU is sent the palette every frame anyway. The light's direction (`sunX`, `sunY`) moves too, so shadows swing round.
+- **Sky.** The sun is drawn only around dusk, big and low (by `tw[1]`), and sinks under the horizon as the phase goes on. The moon and the stars come up with `moonK` (phase 0.62 to 0.92). A star is drawn in `starPal`, each sky band brightened towards white by `moonK`.
+- **The cockpit** takes 100–270 ms to paint, so it is never repainted for the light. It is painted in the daylight jet palette (`jetPalDay`), and `drawCockpit` tones its layers and live parts by `cockpitTint` as it lays them on. The tint is the jet's grade applied to mid grey, as r, g, b in 256ths.
+- **Lamps.** `lampK` goes from 0 to 1 over phase `LAMP_ON0` to `LAMP_ON1` (0.55 to 0.9). Each lamp has its own moment, from a hash (`lampOn(h)`), so they come on one by one.
+  - **Villa windows.** At night some shutter bands are lit (`winLit`, warm yellow). A window is one cell and one floor. It is lit when `hash8(cell * 4 + floor)` is under `winOn`, which goes up to `WIN_LIT` (150 of 256). `drawWorld` and the GPU shader use the same hash, so the two still agree.
+  - **Boats** (`drawBoatLamps`). Small yellow lanterns, all the same warm colour: one each side a little forward of the middle, one on the stern and one at the top of the foremast. Each is one voxel drawn by `lampVox` inside the boat's own `voxBegin` … `voxEnd`, so the hull and the sails hide it where they should. Only a lamp that shows gets its glow. The deckhouse windows and the open hatch (`YM_WINDOW`) glow warm with `lampK`.
+  - **Gardens.** A lamp post (`P_LAMP`) stands by the end of every bench (`placeLamps`), in the villa gardens, on the terraces and along the promenades, and four in the chapel's garden. At night its lantern is lit (`LAMP_LIT`) and glows. A faint warm light falls on each statue, and each fountain is lit from under the water: a blue glow, and the spray turns pale.
+  - **The chapel.** Its windows are `YM_WINDOW`, the boats' window material, so they glow warm with `lampK` the same way.
+  - **The glow.** `glow` adds a lamp's light to the frame in quarter steps, dithered with `BAYER` so it keeps the pixel look. Its radius follows the screen scale (1.5 to 9 pixels). `lampGlow` does the same for a world point, and is skipped when the ground or a house is in front of it.
+  - **Lamp materials.** `YM_LAMP` is the last boat material. It has the same colour in all four shades and is not graded: it gives light, it does not take it. `YM_GLASS`, just before it, is an unlit lantern.
+  - **Stone.** The chapel's and the temple's materials (`YM_TRAV` … `YM_OCHRE`) take the night almost as the ground does (`gradeT(c, 0.8, 0.85)`), not as lightly as the boats, so they read as moonlit stone and not as lit up.
+
+In development, `enzoScene.setLight(s)` jumps the light to `s` along the way from day (0) to night (1), and `enzoScene.phase` reads it.
 
 ## World
 
@@ -168,7 +188,7 @@ The map is `N = 2048` and wraps. Index of `(x, y)` is `(y << 11) | x`, masked wi
 
    A grove is a patch of about 32 cells sharing one hash (`grove`), so kinds come in stands. One tree in 8 is a stray leafy tree in any grove.
 5. Spawn is open water (material 0–2) with some land within 120, not surrounded by it.
-6. Villages with their gardens, then docks, then lakeside viewpoints, then wildflowers, then free boats, then birds.
+6. Villages with their gardens, then docks, then lakeside viewpoints, then wildflowers, then the chapel and the temple, then a lamp by every bench, then free boats, then birds.
 7. About 200 cloud streaks on the 1024 map. Each cell stores a rank and a thickness. `clouds` shows ranks below a cutoff, so the slider adds or removes whole clouds. They drift slowly (`time * 7` on the cloud map). Clouds sit at `CLOUD_ALT` (40) and stack up to 8 (`CK`). `ZTOP` is 48.
 
 Height of drawn columns is capped by `HMAX` (40). The jet’s clearance looks at the ground ahead, including trees and houses.
@@ -220,21 +240,22 @@ Villages prefer grass near water, with a cluster near the spawn coast so there i
 
 Wall height is `floors * FLOOR_H` (3) above the floor. Edge cells are the wall colour, and every other non-corner edge cell uses the windowed version (28–31). The interior is a hip roof: height rises with the distance in from the edge, cells on a hip line (two sides tie) are 20, west and north faces 22 (sunny), east and south faces 21 (shaded). Gardens get 2–4 cypresses (34, 7–10 tall), 1–3 topiary domes (36), and flowers on about one cell in seven along the ring. Trees in the yard are cleared. `houseMap` stores the house id on footprint cells. `houses[]` keeps `{x, y, w, d, base, alive}`.
 
-Shutters are not cells. `drawWorld` paints them while it fills a wall column of a windowed material: it recovers the height of each pixel row from the previous depth step's `R` and `m` (`Rp`, `mp`) and draws a band of `shutterLit` or `shutterShade` for 1.5 of every `FLOOR_H` (3) units of height, so each floor shows one row of windows in every view.
+Shutters are not cells. `drawWorld` paints them while it fills a wall column of a windowed material: it recovers the height of each pixel row from the previous depth step's `R` and `m` (`Rp`, `mp`) and draws a band of `shutterLit` or `shutterShade` for 1.5 of every `FLOOR_H` (3) units of height, so each floor shows one row of windows in every view. At night some of them are lit (see "Day and night").
 
 Bombs come from the jet only. B held calls `dropBomb` every 0.38s, up to 18 in the air. A bomb inherits some of the jet’s horizontal speed, starts a little under the jet, and falls (gravity 95, terminal about 220). It explodes at the ground.
 
 - On land the radius is 12. On water it is 6.
 - Any house touched is wrecked once: footprint becomes rubble (23) and scorch (24), one cell tall above the old floor. The yard around it scorches.
 - Other land in the inner blast is cratered (height drops, scorch or rubble). Anything `isGreen` in the outer part scorches.
-- Statues, benches, urns and fountain sprays inside the radius are knocked down (`alive = false`).
+- Statues, benches, urns, lamps and fountain sprays inside the radius are knocked down (`alive = false`).
+- The chapel and the temple cannot be destroyed: `explode` skips their footprint (`parkMap` 4). The hedges and lawns round them scorch like any garden, and their lamps can be knocked down.
 - Sparks and smoke. Water explosions are smaller and shorter.
 
 The person cannot drop bombs. `setBomb(false)` is forced while on foot.
 
 ## Gardens
 
-`parkMap` (one byte a cell) records what a cell already belongs to: 1 a house and its yard, 2 a villa garden, 3 a lakeside terrace, promenade or path. Every layout checks it is 0 before it builds, and `stampHouse` rejects a footprint or yard that touches any of it, so layouts never run over each other. Docks come after and skip materials 32 and up.
+`parkMap` (one byte a cell) records what a cell already belongs to: 1 a house and its yard, 2 a villa garden, 3 a lakeside terrace, promenade, path, or the chapel's garden and the temple's lawn, 4 the footprint of the chapel or the temple. Every layout checks it is 0 before it builds, and `stampHouse` rejects a footprint or yard that touches any of it, so layouts never run over each other. Docks come after and skip materials 32 and up.
 
 **Villa gardens.** `stampGarden` runs for each villa after its yard. It tries the three layouts, starting from a random one, on the four sides in random order, deepest first (`GARDEN_DEPTHS`), and takes the first that fits: every cell open grass or trees, not in `houseMap` or `parkMap`, and within 4 of the house's floor. The garden is as wide as the yard plus the house on that side, made odd so it is symmetric about the gate's axis, and levelled to the floor. It is open: no hedge round it. The balustrade on that side becomes gravel, with an urn on a post at each end.
 
@@ -252,7 +273,21 @@ The promenade follows the shore from both ends of the terrace. A breadth-first s
 
 **Wildflowers.** `placeWildflowers` runs last. Every 6 cells it may start a patch, with a chance set by a smooth meadow field (bilinear over a hash grid of 64-cell squares), so some slopes are thick with flowers and others bare. The chance is `(dens − 0.3) × 0.48` within about 40 of a house (`nearHouse`, a grid of 16-cell squares) and half that elsewhere, so about 10,000 flower cells on a map. A patch has a radius of 0.8–2.6 and fills about 70% of its cells, mostly in one colour. `flowerAt` gives yellow or white, half and half, everywhere: beds, rings, terraces and meadows. Only open grass outside `parkMap` and houses. A flower cell is 1 above `floorMap`.
 
-**Props** are `props[]` `{kind, x, y, z, yaw, alive}`, models in `PROPS`: surface voxels of `PROP_G` (0.2) built by `propModel(build, g)`. Its `box` takes an optional part tag, kept in the model's `P`, and a box one voxel thick is a plate whose voxels all face up. Kinds 0 and 1 are marble statues (an orator with the right arm raised, a figure with a staff), about 3.4 tall. 2 is a bench, dark brown slats on a dark iron frame, 2.8 long, the sitter facing forward. 3 is an urn of yellow flowers. Their colours are boat materials (`YM_MARBLE`, `YM_WOOD`, `YM_IRON`, `YM_BLOOM`, `YM_LEAF`). `fountains[]` `{x, y, z, alive}` are the spouts. `drawGardens` draws the props within 780 of the camera and on screen, then each fountain's spray: a dotted jet up from the spout and four arcs of drops falling outward.
+**Props** are `props[]` `{kind, x, y, z, yaw, alive}`, models in `PROPS`: surface voxels of `PROP_G` (0.2) built by `propModel(build, g)`. Its `box` takes an optional part tag, kept in the model's `P`, and a box one voxel thick is a plate whose voxels all face up. Kinds 0 and 1 are marble statues (an orator with the right arm raised, a figure with a staff), about 3.4 tall. 2 is a bench, dark brown slats on a dark iron frame, 2.8 long, the sitter facing forward. 3 is an urn of yellow flowers. 4 is a garden lamp: a slim iron post with a glass lantern on top, 4.2 tall, by the end of every bench and a little behind it (`placeLamps`, which takes nothing from the random stream). Their colours are boat materials (`YM_MARBLE`, `YM_WOOD`, `YM_IRON`, `YM_BLOOM`, `YM_LEAF`). `fountains[]` `{x, y, z, alive}` are the spouts. `drawGardens` draws the props within 780 of the camera and on screen, then each fountain's spray: a dotted jet up from the spout and four arcs of drops falling outward.
+
+## The chapel and the temple
+
+Two buildings stand once on the map, each drawn as voxels like the boats, not as ground cells: a small domed chapel in the Roman manner and a garden temple of flint. Each is a function of a point, `chapelAt(a, f, z)` and `templeAt(a, f, z)`, which returns the material there or 0, in map units across, forward (the way the door or the niche faces) and up from the floor. `MONUMENTS` holds both, with their extents. `monumentBuilder` samples one on a grid at a voxel size, keeps the surface voxels and takes each normal from which of its 26 neighbours are empty. There are three levels of detail (`MON_LOD`: 0.5, 0.25, 0.125). The two coarse ones are made when the building is placed. The fine one (1.8M samples for the chapel, about 200 ms) is made a few milliseconds a frame (`monumentFine`) while the middle one is shown, so coming close does not stall.
+
+- **The chapel**, about 21 tall. A square block of brick panels between travertine pilasters, arched windows and niches, a porch of two columns under a pediment, a cornice and a parapet with an obelisk at each corner. On it an octagonal drum with a window in each face, a ribbed lead dome with eight round dormers, and a lantern of eight columns with a cupola, a gilt ball and a cross. Materials `YM_TRAV`, `YM_BRICK`, `YM_LEAD`, `YM_GOLD`, and `YM_WINDOW` for the glass.
+- **The temple**, about 11 tall and 10 across, and shallow. A flint wall (`YM_FLINT` and `YM_FLINT2`, speckled by a hash in quarter cells so every level of detail shows the same stones) with a tall round-arched niche, its vault plastered ochre (`YM_OCHRE`), and in it a marble statue on a pedestal. Two pairs of limestone (`YM_LIME`) columns on high plinths carry an entablature that breaks forward over them. Over that an attic with a plain panel in the middle and four dies with round caps.
+
+**Placing them.** Neither draws from the random stream. Both look round every villa, in 16 directions at a few distances, face the villa they were found from (square to the map), and score the spot: villas within 90, a front turned to the sun (`sunward`: facing −x or −y, the lit sides in `voxBegin`), and closeness to the spawn.
+
+- `placeChapel` keeps its middle at least 24 from any house. It stands in a walled garden in the Italian manner, the biggest of `CHAPEL_GARDENS` that fits (39, 33 or 28 long by 25 across), laid out by `chapelPlan`. A low box hedge (`M_HEDGE`, 1 high) runs all round with a gate on the axis, and a gravel walk runs inside it. There is clipped lawn about the chapel and a paved square before the door. Then comes the parterre down to the gate: a gravel walk on the axis, beds of lawn edged with box with a clipped cone in each, and a pair of long stone-rimmed pools. Every cell must be open grass, trees or flowers within 2 of the floor near the chapel and 3 elsewhere. The garden is levelled to that floor. Trees within 9 of the hedge are cleared. There is a lamp at the square's front corners and one either side of the gate, a cypress either side outside the gate, and a gravel path on to the villa's yard (`gravelPath`).
+- `placeTemple` keeps at least 300 from the chapel and 18 from any house, and prefers a spot with wood behind and beside it (`templeSite` counts the tree cells). Those trees are kept, so it stands against the wood. In front, the trees are cleared for 24. There is a paved step, a lawn with a gravel walk up the middle, and a gravel path to the villa.
+
+Each footprint cell is paved and marked `parkMap` 4, and `monumentTop` keeps the height of the building over it. `groundAt` reads that, so the plane climbs over the building and bombs burst on it. `standable` rejects the footprint, and `explode` leaves it standing. `drawMonuments` runs right after the sky, before everything else that stands in the world, and writes `zbuf` (`yZW`), so what is behind it is hidden.
 
 ## Person
 
@@ -262,7 +297,7 @@ The figure is `PERSON`: boxes of surface voxels (`PERSON_G` 0.25) with normals, 
 
 Walking speed is 20. Turn rate is 2.1 rad/s. Forward is the same axis as the jet, `(sin(yaw), -cos(yaw))`.
 
-`standable` rejects water, house cells, tree trunks of any kind (`isTrunk`), cypresses (34), anything `isBuilt`, and box hedge, fountain water and plinths (43, 45, 46). Leaves, sand, grass, rock, snow, gravel, garden, flowers, paving, balustrade, topiary and dock planks are allowed. Benches are props, not cells, so the person walks through them. `canStep` also rejects a step up greater than 4. Down is free. `walkFloor` returns `floorMap` on trunk and leaf cells, otherwise `heightMap`, so the person stands on the ground under the trees and the close camera does not climb onto the canopy.
+`standable` rejects water, house cells, tree trunks of any kind (`isTrunk`), cypresses (34), anything `isBuilt`, box hedge, fountain water and plinths (43, 45, 46), and the chapel and the temple (`parkMap` 4). Leaves, sand, grass, rock, snow, gravel, garden, flowers, paving, balustrade, topiary and dock planks are allowed. Benches are props, not cells, so the person walks through them. `canStep` also rejects a step up greater than 4. Down is free. `walkFloor` returns `floorMap` on trunk and leaf cells, otherwise `heightMap`, so the person stands on the ground under the trees and the close camera does not climb onto the canopy.
 
 Cameras while walking (`footView` 0 overhead, 1 first):
 
@@ -399,7 +434,7 @@ Bumps: each plane has damped springs on roll, pitch, yaw and height (`joltR`, `j
 
 The plane has no dark outline. To keep thin parts (struts, wires, the fin edge) from breaking into dots between slices, `sliceT` flags voxels that have a voxel above and at most one neighbour; `drawJet` repeats their splat partway toward the slice above.
 
-**The cockpit** (`cockpit.ts`) is an open 1920s cockpit, no HUD and no radar. It is rebuilt when the frame size or the plane colours change. Three layers parallax with the head: the nose (blue deck, the front cockpit, three cylinder heads), the wings (the upper wing's underside with ribs, cabane and interplane struts, wires, the lower wing at the sides), and the near layer (windscreen frame, leather coaming with stitches, side walls, the black panel). Drawn live each frame: the propeller disc, the windscreen glass, needles, the throttle knob, and the stick leaning with turn and climb. Gauges are speed, engine rpm (with a red line), altitude (two hands), oil, fuel (dummy, slowly falling), and a card compass under a red lubber line. It only composites when the view is rolled onto the sheet, which is the cockpit and hard rolls.
+**The cockpit** (`cockpit.ts`) is an open 1920s cockpit, no HUD and no radar. It is rebuilt when the frame size or the plane colours change, not when the light does (see "Day and night"). Three layers parallax with the head: the nose (blue deck, the front cockpit, three cylinder heads), the wings (the upper wing's underside with ribs, cabane and interplane struts, wires, the lower wing at the sides), and the near layer (windscreen frame, leather coaming with stitches, side walls, the black panel). Drawn live each frame: the propeller disc, the windscreen glass, needles, the throttle knob, and the stick leaning with turn and climb. Gauges are speed, engine rpm (with a red line), altitude (two hands), oil, fuel (dummy, slowly falling), and a card compass under a red lubber line. It only composites when the view is rolled onto the sheet, which is the cockpit and hard rolls.
 
 ## Drawing the small actors
 
@@ -417,14 +452,15 @@ Shared palettes (`yachtPal`, `lifePal`, `shutterLit`, `shutterShade`) are rebuil
 
 - `gameLog.dump()` shows recent lines. `gameLog.clear()` wipes them.
 - `gameLog.enabled = false` silences it. `gameLog.level = 'warn'` keeps failures only.
-- `gameLog.child('foot')` is a scoped logger. The scene already uses `world`, `foot`, and `boat`.
+- `gameLog.child('foot')` is a scoped logger. The scene already uses `world`, `foot`, `boat`, and `night`.
 
-The world line lists islands, specks, docks, boats, fish, whales, gardens, viewpoints, props, wildflower cells, and birds. V logs where the person stood (`nearby`, `dock`, or `island`) or `nowhere to stand`. Boarding logs a boat, a missing boat, stepping ashore, or no shore.
+The world line lists islands, specks, docks, boats, fish, whales, gardens, viewpoints, props, wildflower cells, birds, and where the chapel and the temple are. Each of those two also has its own line: the villas near it, the garden's length or the wood round it, the path, and how far it is from the spawn. If one finds no room, it warns. V logs where the person stood (`nearby`, `dock`, or `island`) or `nowhere to stand`. Boarding logs a boat, a missing boat, stepping ashore, or no shore.
 
 ## Easy to get wrong
 
 - Flight pitch is inverted in the React key mapper only. The scene’s `setKeys` treats positive climb as up. Walking must keep sending positive move for W.
 - Palette arrays must stay the same length. `NMAT` is `MAT_TOP.length`.
+- A colour that changes with the light goes through `gradeT`, `mix3` or `mixN` in `rebuildPalettes`, never through a test of `p.timeOfDay`, which is only where the light starts. Lamp materials stay at the end of `YACHT_COL`, because `k >= YM_LAMP` is what makes a material a lamp. The window hash in `drawWorld` and in the GPU shader must stay the same.
 - `floorMap` has to be copied before forests. If walking uses `heightMap` in the trees, the person stands on the leaves. If leaves stay in `standable`’s block list, the person cannot pass between trunks.
 - Dock normals have to come from the ocean mask. A cardinal step looks diagonal to a diagonal beach, and a lake will accept a “deep water” test that only looks a few cells out.
 - Overhead cameras with `vC` or `vK` above 0 draw the sky volume. The walking camera must stay under `CLOUD_ALT` or the view fills with cloud. The boat aerial view stays orthographic (`vQ`, `vC`, and `vK` all 0) so it does not enter that volume. Its look-down is only `vTan`, and only the cloud hole keeps clouds off the boat.
@@ -432,7 +468,8 @@ The world line lists islands, specks, docks, boats, fish, whales, gardens, viewp
 - Enzo out on deck is drawn from the rig buffers after the rig has been rasterized, so `drawEnzoOut` must come after the rig's `rasterVox` in `drawYacht`. Anything new that resets or leaves the boat you are in should call `loungeReset`, or he can come back sitting on a different boat. A new yacht needs a `seat` clear of its shrouds and booms, on a part of the deck wide enough for the walk out (`yachtHalf` there minus 0.5).
 - World rebuild resets `aboard` inside `placeDocks` and reseats the walker if they were on foot. The reseat also skips specks.
 - New wall or roof materials have to be added to `isBuilt`, and windowed walls to `WINDOWED` (which feeds `WINDOW_MAT`). Otherwise the person walks on roofs, bombs leave walls standing, or shutters do not show.
-- Boats do not write `zbuf`, except your own in first person. Otherwise the jet is drawn after them and lands on top, even when behind a sail.
+- Boats do not write `zbuf`, except your own in first person. Otherwise the jet is drawn after them and lands on top, even when behind a sail. The chapel and the temple always write it, and are drawn before anything else that stands, so they hide what is behind them.
+- A building drawn as voxels over ground cells needs its cells in `parkMap` 4 with a height in `monumentTop`. Without it, the plane flies through it, the person walks into it, and bombs crater the ground under it.
 - The boat first-person camera and the walking first-person camera are different lenses. The walking one is long (the eye 26 behind the camera point), so anything of your own boat near the eye would sit in the middle of the picture as a cut-open hull. Keep the boat on its wide lens.
 - Trees are found with `isTree` / `isTrunk`, not by material range. Checking only 9–11 misses firs and round-crowned trees.
 - `drawWorld` must capture `Rp` and `mp` before it advances the depth step, or the shutter bands slide up and down the walls as the camera moves.

@@ -40,6 +40,14 @@ function mix(bg, fg, k) {
   return ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0
 }
 
+/** a colour in the light of the hour: each channel scaled by t (r, g, b, in 256ths) */
+function tinted(c, t) {
+  const r = Math.min(255, ((c & 255) * t[0]) >> 8)
+  const g = Math.min(255, (((c >> 8) & 255) * t[1]) >> 8)
+  const b = Math.min(255, (((c >> 16) & 255) * t[2]) >> 8)
+  return ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0
+}
+
 /** a small drawing surface over a pixel buffer; (ox, oy) moves everything drawn on it */
 class Sheet {
   buf
@@ -318,9 +326,10 @@ export function buildCockpit(W, H, pal) {
 /**
  * Lays a layer over the frame, shifted by (dx, dy + fy): fy is the part of a pixel left over
  * while the layer is sliding, so it glides instead of stepping. Where the sun reaches it, it
- * is lit: the light falls in a slanted band with broken edges.
+ * is lit: the light falls in a slanted band with broken edges. tint, when there is one, is the
+ * light of the hour (dusk, night): the layers are painted in daylight colours and toned as they go on.
  */
-function lay(fb, art, src, dx, dy, fy, top, bottom, light) {
+function lay(fb, art, src, dx, dy, fy, top, bottom, light, tint) {
   const { W, H, aw, ah, pad } = art
   const w1 = fy > 0.004 ? Math.round(fy * 256) : 0 // how much of the row above shows in each row
   const y0 = Math.max(0, top + dy)
@@ -331,9 +340,16 @@ function lay(fb, art, src, dx, dy, fy, top, bottom, light) {
     let i = sy * aw + pad - dx
     let o = ty * W
     if (!light && w1 === 0) {
-      for (let x = 0; x < W; x++, o++, i++) {
-        const c = src[i]
-        if (c !== 0) fb[o] = c
+      if (tint) {
+        for (let x = 0; x < W; x++, o++, i++) {
+          const c = src[i]
+          if (c !== 0) fb[o] = tinted(c, tint)
+        }
+      } else {
+        for (let x = 0; x < W; x++, o++, i++) {
+          const c = src[i]
+          if (c !== 0) fb[o] = c
+        }
       }
       continue
     }
@@ -358,6 +374,7 @@ function lay(fb, art, src, dx, dy, fy, top, bottom, light) {
         }
       }
       if (c === 0) continue
+      if (tint) c = tinted(c, tint)
       if (light && x >= xa && x < xb) {
         // ragged edges, so the light does not end in a ruled line
         const e = Math.min(x - xa, xb - x)
@@ -371,9 +388,14 @@ function lay(fb, art, src, dx, dy, fy, top, bottom, light) {
 /** lays the cockpit over the frame and draws its live parts */
 export function drawCockpit(fb, art, live) {
   const { W, H, s, cx } = art
-  const B = art.pal.body
-  const A = art.pal.hot
-  const M = art.pal.metal
+  // the live parts take the light of the hour too
+  const t0 = live.tint
+  const tint = t0 && (t0[0] !== 256 || t0[1] !== 256 || t0[2] !== 256) ? t0 : null
+  const tone = (c) => (tint ? tinted(c, tint) : c)
+  const B = art.pal.body.map(tone)
+  const A = art.pal.hot.map(tone)
+  const M = art.pal.metal.map(tone)
+  const woodT = tone(art.pal.wood)
   const R = (v) => Math.round(v * s)
   const a = clamp(live.inPlace, 0, 1)
   if (a <= 0) return
@@ -423,7 +445,7 @@ export function drawCockpit(fb, art, live) {
     const s0 = Math.sin(ang)
     const c1 = Math.cos(ang - 0.42)
     const s1 = Math.sin(ang - 0.42)
-    const wood = art.pal.wood
+    const wood = woodT
     const y0 = Math.max(0, pcy - pr)
     const y1 = Math.min(H - 1, pcy + pr)
     for (let y = y0; y <= y1; y++) {
@@ -444,8 +466,8 @@ export function drawCockpit(fb, art, live) {
     }
   }
 
-  lay(fb, art, art.nose, oNose.x, oNose.y, oNose.f, art.noseTop, H + art.pad, farLight)
-  lay(fb, art, art.wing, oWing.x, oWing.y, oWing.f, -art.pad, H + art.pad, farLight)
+  lay(fb, art, art.nose, oNose.x, oNose.y, oNose.f, art.noseTop, H + art.pad, farLight, tint)
+  lay(fb, art, art.wing, oWing.x, oWing.y, oWing.f, -art.pad, H + art.pad, farLight, tint)
 
   // the windscreen's glass: a faint tint and two slanting glints
   {
@@ -466,7 +488,7 @@ export function drawCockpit(fb, art, live) {
     }
   }
 
-  lay(fb, art, art.near, oNear.x, oNear.y, oNear.f, art.coamTop - R(40), H + art.pad, light)
+  lay(fb, art, art.near, oNear.x, oNear.y, oNear.f, art.coamTop - R(40), H + art.pad, light, tint)
 
   // the gauges' needles: airspeed, engine revolutions, height, oil, and the compass card
   {
@@ -536,7 +558,7 @@ export function drawCockpit(fb, art, live) {
     const topY = R(282) - Math.round(clamp(live.climb, -1, 1) * R(3))
     const lean = clamp(live.turn, -1, 1) * R(10)
     const reach = H + R(40) - topY
-    const wood = art.pal.wood
+    const wood = woodT
     const gripH = Math.max(8, R(16))
     for (let y = topY; y < H + art.pad; y++) {
       const d = y - topY

@@ -46,6 +46,7 @@ precision highp sampler2D;
 #define NCMASK ${K.NC - 1}
 #define NC ${K.NC}
 #define FLOOR_H ${K.FLOOR_H}.0
+#define NSHIFT ${Math.round(Math.log2(K.N))}
 #define JET_W ${K.JET_W}
 #define JET_L ${K.JET_L}
 #define PIV_K ${Number(K.PIV_K).toFixed(6)}
@@ -107,6 +108,13 @@ float stepV(int k) { return texelFetch(uSteps, ivec2(k & 63, k >> 6), 0).r; }
 uint pal(int row, int i) { return texelFetch(uPal, ivec2(i, row), 0).r; }
 uint cloudAt(int x, int y) { return texelFetch(uCloud, ivec2(x & NCMASK, y & NCMASK), 0).r; }
 uint noise(int x, int y) { return texelFetch(uNoise, ivec2(x & 255, y & 255), 0).r; }
+// hash8 in scene.ts: the same bits, as uint arithmetic wraps like Math.imul
+uint hash8(uint o) {
+  uint h = (o ^ (o >> 13)) * 0x5bd1e995u;
+  h ^= h >> 15;
+  h *= 0x2c1b3c6du;
+  return (h >> 24) & 255u;
+}
 
 // the depth at which the line t0 + t1·v leaves [lo, hi] (r1 is 1 / t1, or 0 when t1 is 0)
 float exitV(float t0, float t1, float r1, float lo, float hi) {
@@ -429,11 +437,17 @@ void main() {
         }
         uint col = wall ? sideC : topC;
         if (wall && (pal(4, m) & 2u) != 0u) {
-          // a villa's windows: a band of green shutters on each floor, below the cornice
+          // a villa's windows: a band of green shutters on each floor, below the cornice. At night
+          // some are lit, each window (this cell, this floor) at its own moment: pal(5, 23) of 256
           float mp = uScale / (1.0 + uQ * vPrev);
           float Rp = uCy - mp * (uTn * vPrev - uA) + EPS;
           float kf = h - (Rp - float(y)) / mp - 0.8;
-          if (kf > 0.0 && mod(kf, FLOOR_H) < 1.5) col = shade ? pal(5, 21) : pal(5, 20);
+          if (kf > 0.0 && mod(kf, FLOOR_H) < 1.5) {
+            col = shade ? pal(5, 21) : pal(5, 20);
+            uint on = pal(5, 23);
+            uint cell = (uint(gy & NMASK) << NSHIFT) | uint(gx & NMASK);
+            if (on != 0u && hash8(cell * 4u + uint(int(kf / FLOOR_H))) < on) col = pal(5, 22);
+          }
         }
         oColor = colour(col, fogAt(v));
         oDepth = packDepth(v);
@@ -726,6 +740,8 @@ export function createGpuWorld() {
     palData[339] = f.sparkB
     palData[340] = f.shutterLit
     palData[341] = f.shutterShade
+    palData[342] = f.winLit
+    palData[343] = f.winOn
     gl.activeTexture(gl.TEXTURE0 + SPARE)
     gl.bindTexture(gl.TEXTURE_2D, tPal)
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 64, 6, gl.RED_INTEGER, gl.UNSIGNED_INT, palData)

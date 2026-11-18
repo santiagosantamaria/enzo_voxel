@@ -64,6 +64,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const scaleRef = useRef(4)
   const layoutRef = useRef(() => {})
   const [hint, setHint] = useState({ mode: viewOf(params.view), on: true })
+  const [night, setNight] = useState(params.timeOfDay === 'night')
   const hintTimer = useRef(0)
   const revealHint = (mode, seconds) => {
     setHint({ mode, on: true })
@@ -212,6 +213,12 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         setAboard(scene.aboard)
         setFootView(scene.footView)
         if (!scene.onFoot) revealHintRef.current(scene.view, 7)
+        return
+      }
+      if (e.code === 'KeyN' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        scene.toggleNight()
+        setNight(scene.night)
         return
       }
       if (e.code === 'KeyE' && !e.repeat && scene.onFoot && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -415,7 +422,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
             className="rounded-[3px] bg-[#0b1a33]/55 px-2.5 py-1.5 text-center font-mono text-[11px] uppercase leading-none tracking-[0.14em] text-white/90"
             style={{ textShadow: '0 1px 0 rgba(0,0,0,.45)' }}
           >
-            {footHint || hints[hint.mode]}
+            {(footHint || hints[hint.mode]) + (buttons ? '' : night ? ' · N for day' : ' · N for night')}
           </p>
         </div>
       )}
