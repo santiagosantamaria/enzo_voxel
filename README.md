@@ -41,7 +41,7 @@ To draw everything on the CPU instead, add `?cpu` to the address, for example `h
 | Space | Overhead, chase, cockpit | Overhead or first person | Isometric or first person |
 | N | Night or day | Night or day | Night or day |
 
-On a phone there are buttons: View, Boost and Bomb, and Walk to go on foot. On foot, drag anywhere to walk, Board appears when a boat is near, and Fly takes you back to the plane. In a boat, a tap sets sail or stops, and a sideways drag steers.
+On a phone there are buttons: View, Boost and Bomb, and Walk to go on foot. Flying, drag the way you want the plane to go, and tap to roll. On foot, drag anywhere to walk, Board appears when a boat is near, and Fly takes you back to the plane. In a boat, a tap sets sail or stops, and a drag points the boat the way you drag.
 
 The game starts in the light of your clock, day from 7 am and night from 8 pm, and follows it until you press N.
 

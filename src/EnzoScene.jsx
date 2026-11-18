@@ -12,9 +12,9 @@ const HINTS = {
 }
 
 const TOUCH_HINTS = {
-  top: 'Touch to steer · Tap to roll · Hold Boost · Bomb the houses · View for chase view · Walk to go on foot',
-  chase: 'Touch to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for the cockpit · Walk to go on foot',
-  cockpit: 'Touch to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for overhead · Walk to go on foot',
+  top: 'Drag the way to fly · Tap to roll · Hold Boost · Bomb the houses · View for chase view · Walk to go on foot',
+  chase: 'Drag to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for the cockpit · Walk to go on foot',
+  cockpit: 'Drag to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for overhead · Walk to go on foot',
 }
 
 // On a phone the frame has about this many pixels, a little more than a 1280 by 720 desktop's, so it shows
@@ -63,8 +63,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const [canBoard, setCanBoard] = useState(false) // a boat in reach on foot, or a shore aboard
   const heldRef = useRef(new Set())
   const sendKeysRef = useRef(() => {})
-  const steerRef = useRef(null)
-  const stickRef = useRef(null) // the finger steering on foot: where it went down, and the turn and move it gives
+  const stickRef = useRef(null) // the finger steering: where it went down, the way it has dragged, and the turn and move it gives
   const ringRef = useRef(null)
   const knobRef = useRef(null)
   const actionsRef = useRef({ toggleWalk() {}, board() {} }) // V and E, for the buttons too
@@ -244,16 +243,29 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         else if (k === 'bomb') bomb = true
       })
       if (scene.onFoot) {
-        // a finger on the screen steers as well: sideways turns, and on land up and down walk
+        // a finger on the screen steers as well. On land it is a stick: sideways turns, up and down walk.
+        // In a boat the boat turns to the way it drags, in any direction (a tap sets sail or stops).
         const st = stickRef.current
-        if (st) {
+        if (st && !scene.aboard) {
           turn += st.turn
-          if (!scene.aboard) move += st.move
+          move += st.move
         }
+        const aim = st && scene.aboard && Math.hypot(st.dx, st.dy) > STICK_DEAD * 1.5
+        scene.setAim(aim ? st.dx : null, aim ? st.dy : null)
         scene.setWalk(turn, move)
         scene.setKeys(0, 0, false)
         scene.setBomb(false)
       } else {
+        // flying, the plane goes the way the finger drags. Overhead it turns to point that way, as a boat
+        // does. From behind and from the seat the drag is a stick: sideways turns, up climbs, down dives.
+        const st = stickRef.current
+        const over = scene.view === 'top'
+        if (st && !over) {
+          turn += st.turn
+          climb += st.move
+        }
+        const aim = st && over && Math.hypot(st.dx, st.dy) > STICK_DEAD * 1.5
+        scene.setAim(aim ? st.dx : null, aim ? st.dy : null)
         scene.setWalk(0, 0)
         scene.setKeys(turn, climb, boost)
         scene.setBomb(bomb)
@@ -378,23 +390,11 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   }
 
   const byFinger = (e) => touchControls !== 'off' && e.pointerType === 'touch'
-  const endFinger = (e, tap) => {
-    const s = steerRef.current
-    if (!s || s.id !== e.pointerId) return
-    steerRef.current = null
-    const scene = sceneRef.current
-    if (!scene) return
-    if (tap && !s.moved && performance.now() - s.t < 260) {
-      scene.press()
-      scene.release()
-    }
-    scene.pointerLeave()
-  }
   const mine = (e) => e.stopPropagation()
-  // the stick on foot: it starts where the finger goes down, and a ring and a knob show it
+  // the stick: it starts where the finger goes down, and a ring and a knob show it
   const stickStart = (e) => {
     const r = wrapRef.current.getBoundingClientRect()
-    stickRef.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t: performance.now(), moved: false, turn: 0, move: 0 }
+    stickRef.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t: performance.now(), moved: false, turn: 0, move: 0, dx: 0, dy: 0 }
     try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* touch already ended */ }
     const ring = ringRef.current
     if (ring) {
@@ -407,9 +407,10 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
     const st = stickRef.current
     if (!st || st.id !== e.pointerId) return
     let dx = e.clientX - st.x0
-    // aboard, a drag only steers: up and down mean nothing, a tap sets sail or stops
-    let dy = sceneRef.current?.aboard ? 0 : e.clientY - st.y0
+    let dy = e.clientY - st.y0
     if (Math.hypot(e.clientX - st.x0, e.clientY - st.y0) > 12) st.moved = true
+    st.dx = dx
+    st.dy = dy
     st.turn = stickAxis(dx)
     st.move = stickAxis(-dy)
     const l = Math.hypot(dx, dy)
@@ -427,7 +428,13 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
     if (ringRef.current) ringRef.current.style.display = 'none'
     sendKeysRef.current()
     const scene = sceneRef.current
-    if (tap && scene?.aboard && !st.moved && performance.now() - st.t < 300) scene.sailToggle()
+    if (!scene || !tap || st.moved || performance.now() - st.t >= 300) return
+    // a tap: in a boat it sets sail or stops, and flying it rolls the plane
+    if (scene.aboard) scene.sailToggle()
+    else if (!scene.onFoot) {
+      scene.press()
+      scene.release()
+    }
   }
   const tapButton = (fn) => () => {
     fn()
@@ -443,6 +450,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       scene.toggleView()
       revealHint(scene.view, 7)
     }
+    sendKeysRef.current() // a finger held down steers the new view its own way
     wrapRef.current?.focus({ preventScroll: true })
   }
   const boostOn = (e) => {
@@ -478,7 +486,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const footHint = !onFoot ? null
     : buttons
       ? (aboard
-        ? `Tap to sail or stop · Drag sideways to steer · downwind is faster · Ashore near land · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`
+        ? `Tap to sail or stop · Drag the way to steer · downwind is faster · Ashore near land · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`
         : `Drag to walk · Board when a boat is near · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`)
     : aboard
       ? (footView === 'first'
@@ -500,13 +508,8 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       onPointerEnter={() => wrapRef.current?.focus({ preventScroll: true })}
       onPointerMove={(e) => {
         if (byFinger(e)) {
-          if (stickRef.current) {
-            stickMove(e)
-            return
-          }
-          const s = steerRef.current
-          if (!s || s.id !== e.pointerId) return
-          if (Math.hypot(e.clientX - s.x, e.clientY - s.y) > 12) s.moved = true
+          stickMove(e)
+          return
         }
         const [x, y] = toScene(e)
         sceneRef.current?.pointerMove(x, y)
@@ -515,13 +518,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         const [x, y] = toScene(e)
         if (byFinger(e)) {
           if (!fingerScreen) setFingerScreen(true)
-          if (sceneRef.current?.onFoot) {
-            if (!stickRef.current) stickStart(e)
-          } else {
-            if (steerRef.current) return
-            steerRef.current = { id: e.pointerId, t: performance.now(), x: e.clientX, y: e.clientY, moved: false }
-            sceneRef.current?.pointerMove(x, y)
-          }
+          if (!stickRef.current) stickStart(e)
         } else {
           sceneRef.current?.pointerMove(x, y)
           sceneRef.current?.press()
@@ -530,22 +527,16 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         if (!hintTimer.current) hintTimer.current = window.setTimeout(() => setHint((h) => ({ ...h, on: false })), 9000)
       }}
       onPointerUp={(e) => {
-        if (byFinger(e)) {
-          stickEnd(e, true)
-          endFinger(e, true)
-        } else sceneRef.current?.release()
+        if (byFinger(e)) stickEnd(e, true)
+        else sceneRef.current?.release()
       }}
       onPointerLeave={(e) => {
-        if (byFinger(e)) {
-          stickEnd(e, false)
-          endFinger(e, false)
-        } else sceneRef.current?.pointerLeave()
+        if (byFinger(e)) stickEnd(e, false)
+        else sceneRef.current?.pointerLeave()
       }}
       onPointerCancel={(e) => {
-        if (byFinger(e)) {
-          stickEnd(e, false)
-          endFinger(e, false)
-        } else sceneRef.current?.pointerLeave()
+        if (byFinger(e)) stickEnd(e, false)
+        else sceneRef.current?.pointerLeave()
       }}
       onLostPointerCapture={(e) => stickEnd(e, false)}
     >

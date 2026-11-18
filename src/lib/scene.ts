@@ -3074,6 +3074,10 @@ export function createScene(initial) {
   let walkTurn = 0
   let walkMove = 0
   let sailing = false
+  // a finger dragging on a phone, aboard or flying overhead: the way on the screen to turn to (x right, y down)
+  let aimOn = false
+  let aimX = 0
+  let aimY = 0
   // Enzo out on deck: seconds the boat has lain still, how far along the way out he is
   // (0 below … LOUNGE_END sat on the rail), which way he is going (1 out, -1 back in, 0 not out),
   // the side he sits on (1 starboard, -1 port), and whether W was pressed while he was out
@@ -3664,6 +3668,19 @@ export function createScene(initial) {
     if (!onFoot) return
     footView = footView === 0 ? 1 : 0
   }
+  /** a phone: turn the boat, or the plane overhead, to the way a finger drags on the screen (x right, y down),
+   * or null when the finger lets go. Let go of the plane, it flies straight on, as after the keys. */
+  function setAim(dx, dy) {
+    const on = dx !== null && dx !== undefined && (aboard >= 0 || !onFoot)
+    if (aimOn && !on && !onFoot) {
+      keyMode = true
+      keyTurn = 0
+      keyClimb = 0
+    }
+    aimOn = on
+    aimX = aimOn ? dx : 0
+    aimY = aimOn ? dy : 0
+  }
   function setWalk(turn, move) {
     walkTurn = clamp(turn, -1, 1)
     walkMove = clamp(move, -1, 1)
@@ -3750,7 +3767,7 @@ export function createScene(initial) {
    */
   function loungeStep(b, dt) {
     if (loungeDir === 0) {
-      const still = !sailing && footView === 0 && walkMove === 0 && walkTurn === 0
+      const still = !sailing && footView === 0 && walkMove === 0 && walkTurn === 0 && !aimOn
       restT = still ? restT + dt : 0
       if (restT < LOUNGE_WAIT) return false
       loungeReset()
@@ -3765,7 +3782,7 @@ export function createScene(initial) {
       return false
     }
     if (walkMove > 0) loungeGo = true
-    if (loungeDir > 0 && (walkMove > 0 || walkTurn !== 0)) loungeDir = -1
+    if (loungeDir > 0 && (walkMove > 0 || walkTurn !== 0 || aimOn)) loungeDir = -1
     lounge = Math.min(LOUNGE_END, lounge + loungeDir * dt * (loungeDir < 0 ? LOUNGE_BACK : 1))
     if (lounge > 0) return true
     const go = loungeGo
@@ -3779,7 +3796,15 @@ export function createScene(initial) {
       const b = boats[aboard]
       if (!b) { aboard = -1; return }
       if (!loungeStep(b, dt)) {
-        b.yaw += walkTurn * 1.15 * dt
+        let turn = walkTurn
+        if (aimOn) {
+          // the screen's up is the world's heading −vYaw, so the drag is a heading in the world: turn to it
+          // at the rate of A and D. In first person the view turns with the boat, so it keeps turning while
+          // the finger is held off to one side, like a tiller.
+          const d = wrapAngle(-vYaw + Math.atan2(aimX, -aimY) - b.yaw)
+          turn = clamp(turn + d * 3, -1, 1)
+        }
+        b.yaw += turn * 1.15 * dt
         if (walkMove < 0) sailing = false
         if (walkMove > 0) castOff(b)
       }
@@ -4255,6 +4280,12 @@ export function createScene(initial) {
     const steering = !onFoot && p.followPointer && pointerOn && pointerIdle < 5
     if (!introDone) {
       want = 0
+    } else if (!onFoot && aimOn && !chase) {
+      // a finger dragging overhead: turn to point the way of the drag, as in a boat
+      flown = true
+      const fx = aimX * vCos + aimY * vSin
+      const fy = -aimX * vSin + aimY * vCos
+      want = clamp(wrapAngle(Math.atan2(fx, -fy) - lead.yaw) * 2.6, -maxRate, maxRate)
     } else if (!onFoot && keyMode) {
       want = keyTurn * maxRate
       altGoal += keyClimb * climbMax * dt
@@ -6899,6 +6930,7 @@ export function createScene(initial) {
     setWalk,
     board,
     sailToggle,
+    setAim,
     /** N: towards night, or back towards day (from wherever the light is now) */
     toggleNight() {
       dayGoal = dayGoal > 0.5 ? 0 : 1
