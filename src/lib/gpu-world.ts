@@ -134,8 +134,7 @@ int facadeAt(int fk, float dTop, float a, float mp, uint cell, uint on, int floo
   int fl = max(0, int(floor(dTop / FLOOR_H)));
   float r = dTop - float(fl) * FLOOR_H;
   bool ground = fl >= floors - 1;
-  bool rust = ground && (fk >= 8 || floors >= 3);
-  bool stone = kind == 3 || rust;
+  bool stone = kind == 3;
   int dk = stone ? 3 : 1;
   bool windowed = kind == 2 || (kind == 4 && !ground);
   bool lit = windowed && on != 0u && hash8(cell * 4u + uint(fl)) < on;
@@ -153,11 +152,10 @@ int facadeAt(int fk, float dTop, float a, float mp, uint cell, uint on, int floo
   if (door) {
     float top = 1.3 + 0.6 * (1.0 - sqrt(max(0.0, 1.0 - (da / 0.38) * (da / 0.38))));
     if (da < 0.38 && r >= top) return l3 && da < 0.02 ? 7 : 8;
-    if (l2 && da < 0.45 && r >= top - 0.2) return rust ? 3 : 2;
+    if (l2 && da < 0.45 && r >= top - 0.2) return 2;
   }
-  if (r > FLOOR_H - 0.28) return rust && l2 ? 3 : 2;
-  int courses = l3 && fract(r / 0.55) < 0.1 ? 3 : 2;
-  if (kind == 3) return ground ? courses : (l2 && fract(dTop / 0.8) < 0.08 ? 3 : 2);
+  if (r > FLOOR_H - 0.28) return 2;
+  if (kind == 3) return l2 && fract(dTop / 0.8) < 0.08 ? 3 : 2;
   if (windowed) {
     if (kind == 4 && fl == floors - 2) {
       if (r >= 3.2 && r < 3.95 && da < 0.47) {
@@ -169,10 +167,10 @@ int facadeAt(int fk, float dTop, float a, float mp, uint cell, uint on, int floo
       if (lit) return l3 && da < 0.02 ? 5 : 6;
       return l3 && (da < 0.02 || fract(r * 5.0) < 0.3) ? 5 : 4;
     }
-    if (l2 && da < 0.47 && r >= 1.25 && r < 4.1) return rust ? 3 : 2;
-    if (l2 && da < 0.5 && r >= 0.95 && r < 1.25) return rust ? 3 : 2;
+    if (l2 && da < 0.47 && r >= 1.25 && r < 4.1) return 2;
+    if (l2 && da < 0.5 && r >= 0.95 && r < 1.25) return 2;
   }
-  return rust ? courses : 0;
+  return 0;
 }
 
 // the depth at which the line t0 + t1·v leaves [lo, hi] (r1 is 1 / t1, or 0 when t1 is 0)

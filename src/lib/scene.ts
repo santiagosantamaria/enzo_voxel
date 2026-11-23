@@ -274,7 +274,7 @@ function normalise(field) {
 //        9 tree top · 10 tree · 11 tree edge · 12 rock · 13 rock dark · 14 rock light · 15 snow · 16 snow shade
 //        17–19 stucco wall: ochre, cream, salmon (the top is the terracotta eave) · 20 roof · 21 roof shaded side
 //        22 roof sunny side · 23 rubble · 24 scorch · 25 dock · 26 dock dark · 27 stucco wall, pale yellow
-//        28–31 the same four walls with a column of shuttered windows · 32 tower · 33 tower cap · 34 cypress
+//        28–31 the same four walls with a column of shuttered windows · 32–33 unused (were a tower) · 34 cypress
 //        35 balustrade · 36 topiary · 37–39 fir: top, body, edge · 40–42 round-crowned tree: top, body, edge
 //        villa gardens: 43 box hedge · 44 stone (fountain rim) · 45 fountain water · 46 plinth and spout
 //        47–49 flowers: pink, yellow, white · 50 clipped lawn · 51–52 paving, light and dark
@@ -341,18 +341,16 @@ const FLOOR_H = 5
 // face as it is drawn, after the palazzi of southern Italy: a white stone cornice with dentils under the
 // eaves and a stone band between the floors; on the windowed cells a window with green slatted shutters
 // in a stone frame with a little cornice over it; white stone pilasters at the corners; and in the middle
-// of one long side an arched door in a stone surround, an iron balcony on a stone slab over it. Some
-// houses (all of three floors, and the pink ones) stand on a ground floor of rusticated white stone.
-// FACADE says which a wall material is. facadeAt gives a role (F_…), which each renderer turns into a
+// of one long side an arched door in a stone surround, an iron balcony on a stone slab over it. Every
+// floor is the house's own stucco, the ground floor too. FACADE says which a wall material is. facadeAt gives a role (F_…), which each renderer turns into a
 // colour; gpu-world.ts has the same function in GLSL, and the two must agree. The detail comes in by how
 // many pixels a unit is on the screen (mp), so far off a wall does not shimmer or break into stripes:
 // past FAC_L1 a floor shows only a band where its windows are, and the stone.
-const FACADE = new Uint8Array(64) // kind: 1 plain stucco, 2 stucco with a window, 3 stone pilaster, 4 the door's bay; + 8 rusticated
+const FACADE = new Uint8Array(64) // kind: 1 plain stucco, 2 stucco with a window, 3 stone pilaster, 4 the door's bay
 for (let i = 0; i < 4; i++) {
-  const rust = i === 2 ? 8 : 0
-  FACADE[WALLS[i]] = 1 | rust
-  FACADE[WINDOWED[i]] = 2 | rust
-  FACADE[M_PORTAL[i]] = 4 | rust
+  FACADE[WALLS[i]] = 1
+  FACADE[WINDOWED[i]] = 2
+  FACADE[M_PORTAL[i]] = 4
 }
 FACADE[M_HSTONE] = 3
 // a house's roof (kind 5): its sides show only over the walls; under the eaves, the wall in front of it
@@ -383,8 +381,7 @@ function facadeAt(fk, dTop, a, mp, cell, on, floors) {
   const fl = Math.max(0, Math.floor(dTop / FLOOR_H))
   const r = dTop - fl * FLOOR_H
   const ground = fl >= floors - 1 // the ground floor (or the footing under it, where the ground falls away)
-  const rust = ground && (fk >= 8 || floors >= 3) // a ground floor of rusticated stone
-  const stone = kind === 3 || rust
+  const stone = kind === 3
   const dk = stone ? F_STONE_DK : F_WALL_DK
   const windowed = kind === 2 || (kind === 4 && !ground)
   const lit = windowed && on > 0 && hash8(cell * 4 + fl) < on
@@ -404,13 +401,12 @@ function facadeAt(fk, dTop, a, mp, cell, on, floors) {
   if (door) {
     const top = 1.3 + 0.6 * (1 - Math.sqrt(Math.max(0, 1 - (da / 0.38) ** 2)))
     if (da < 0.38 && r >= top) return l3 && da < 0.02 ? F_IRON : F_DOOR
-    if (l2 && da < 0.45 && r >= top - 0.2) return rust ? F_STONE_DK : F_STONE
+    if (l2 && da < 0.45 && r >= top - 0.2) return F_STONE
   }
-  // a stone band at the foot of each floor: on the ground floor the plinth, darker under rusticated stone
-  if (r > FLOOR_H - 0.28) return rust && l2 ? F_STONE_DK : F_STONE
-  // rusticated stone, in courses (and so the foot of each pilaster); the pilaster above, with joints
-  const courses = l3 && (r / 0.55) % 1 < 0.1 ? F_STONE_DK : F_STONE
-  if (kind === 3) return ground ? courses : l2 && (dTop / 0.8) % 1 < 0.08 ? F_STONE_DK : F_STONE
+  // a stone band at the foot of each floor (on the ground floor, the plinth)
+  if (r > FLOOR_H - 0.28) return F_STONE
+  // the pilaster, the same all the way up, with joints
+  if (kind === 3) return l2 && (dTop / 0.8) % 1 < 0.08 ? F_STONE_DK : F_STONE
   if (windowed) {
     // a balcony over the door: the railing in front of the window, the slab, its shadow
     if (kind === 4 && fl === floors - 2) {
@@ -424,10 +420,10 @@ function facadeAt(fk, dTop, a, mp, cell, on, floors) {
       if (lit) return l3 && da < 0.02 ? F_SLAT : F_LIT
       return l3 && (da < 0.02 || (r * 5) % 1 < 0.3) ? F_SLAT : F_SHUTTER
     }
-    if (l2 && da < 0.47 && r >= 1.25 && r < 4.1) return rust ? F_STONE_DK : F_STONE
-    if (l2 && da < 0.5 && r >= 0.95 && r < 1.25) return rust ? F_STONE_DK : F_STONE
+    if (l2 && da < 0.47 && r >= 1.25 && r < 4.1) return F_STONE
+    if (l2 && da < 0.5 && r >= 0.95 && r < 1.25) return F_STONE
   }
-  return rust ? courses : F_WALL
+  return F_WALL
 }
 /** trees, three kinds: [middle, body, edge] materials. The middle cell is the trunk under the leaves. */
 const TREE_KINDS = [[9, 10, 11], [37, 38, 39], [40, 41, 42]] // leafy, fir, round crown
@@ -1946,9 +1942,8 @@ export function createScene(initial) {
   // of four warm colours, a column of windows every other cell, white stone pilasters at the corners, a
   // stone bay with the door in the middle of one long side (the facade is painted on as it is drawn: see
   // facadeAt), a shallow terracotta hip roof that slopes down on all four sides, lighter on the sunny
-  // slopes, and a gravel yard. A villa is bigger and often three floors, may have a white bell tower with a
-  // pointed cap at one corner, and stands in a garden of cypresses and clipped topiary behind a stone
-  // balustrade.
+  // slopes, and a gravel yard. A villa is bigger and often three floors, and stands in a garden of
+  // cypresses and clipped topiary behind a stone balustrade.
   function stampHouse(cx, cy, rot, rnd) {
     const villa = rnd() < 0.4
     const w0 = villa ? 14 + ((rnd() * 3) | 0) : 9 + ((rnd() * 3) | 0)
@@ -2039,20 +2034,11 @@ export function createScene(initial) {
         houseMap[o] = id
       }
     }
-    // a bell tower at one corner of a villa: white walls, a pointed stone cap
+    // villas once had a bell tower at one corner; the draws for it are still made, so the gardens, the
+    // houses after this one, the chapel and the museum are laid out as they were
     if (villa && rnd() < 0.45) {
-      const tx = rnd() < 0.5 ? 0 : ww - 3
-      const ty = rnd() < 0.5 ? 0 : dd - 3
-      const tTop = top + 5
-      for (let k = 0; k < 9; k++) {
-        const ix = k % 3
-        const iy = (k / 3) | 0
-        const o = ((((cy + ty + iy) & NM) << NSHIFT) | ((cx + tx + ix) & NM))
-        const centre = ix === 1 && iy === 1
-        const side = ix === 1 || iy === 1
-        heightMap[o] = tTop + (centre ? 2 : side ? 1 : 0)
-        matMap[o] = side ? 33 : 32
-      }
+      rnd()
+      rnd()
     }
     for (let dy = -yard; dy < dd + yard; dy++) {
       for (let dx = -yard; dx < ww + yard; dx++) parkMap[(((cy + dy) & NM) << NSHIFT) | ((cx + dx) & NM)] = 1
@@ -3130,8 +3116,8 @@ export function createScene(initial) {
 
   // The museum: one on the map, near the chapel. It goes where a lone outcrop of rock stands on open ground
   // within MUSEUM_R of the chapel: the rock is cleared and the ground levelled. Where there is no such rock,
-  // it goes on open ground in a ring round the chapel. Its doors face the sun where they can, and else the
-  // chapel. Before them a paved forecourt with a lamp at each corner, cypresses down either side, lawn round
+  // it goes on open ground in a ring round the chapel, out of the woods, where there is room behind it for a
+  // deep back garden. Its doors face the sun where they can, and else the chapel. Before them a paved forecourt with a lamp at each corner, cypresses down either side, lawn round
   // the rest, gardens beside and behind it (museumGardens), and a gravel path on to the nearest villa. Like the chapel it takes nothing from the random stream.
   const MUSEUM_R = 240
   const isRock = (m) => m >= 12 && m <= 14
@@ -3148,13 +3134,53 @@ export function createScene(initial) {
   // The museum's gardens, in the manner of the lake's villas: open lawns with gravel walks, clipped box balls
   // and cones, beds of pink flowers, benches, cypresses, and no hedge or wall round the edge, so they can be
   // walked into from anywhere. Either side of the building, a gravel walk and a lawn panel with a round
-  // bed. Behind it, a formal garden on terraces that follow the slope: a parterre of four lawns round a round
-  // bed in a curved hedge, a cross walk, then a long striped grass avenue between gravel walks and cypresses
-  // with a fountain halfway, closed by a statue between urns. Each part is as big as the ground allows, or
-  // left out. They take nothing from the random stream.
+  // bed. Behind it, a formal garden of statues on terraces that follow the slope: a parterre of four lawns
+  // round a round bed with a statue in it, in an open gravel ring, and a statue on each outer lawn; a cross
+  // walk; then a long striped grass avenue between gravel walks, cypresses and statues, with a fountain
+  // halfway, closed by a terrace with a statue between urns and a statue either side. Each part is as big
+  // as the ground allows, or left out, and placeMuseum looks for a site with room for a deep one. They take
+  // nothing from the random stream.
   const MG_SIDE = [27, 25, 23] // how far out the side gardens may reach, widest first
-  const MG_DEPTH = [46, 38, 30, 22, 14] // how deep the back garden may be, deepest first
-  const MG_HW = 16 // its half width
+  const MG_DEPTH = [54, 46, 38, 30, 22, 14] // how deep the back garden may be, deepest first
+  const MG_HW = 20 // its half width
+  const MG_ROW_K = 0.5 // what each row of back garden is worth to the museum's placement
+  const MG_CUT = 4 // how far a row of the back garden may cut down into the ground …
+  const MG_FILL = 3 // … or be built up over it
+  /**
+   * the floors of the rows behind the museum's grounds that will take the back garden, nearest first. It
+   * goes over open land and the beach, so on the shore it runs down to the water.
+   */
+  function museumBackRows(cell, base) {
+    const rowF = []
+    let prev = base
+    for (let g = 0; g < MG_DEPTH[0]; g++) {
+      const f = MG_B - 1 - g
+      const count = new Map()
+      let ok = true
+      for (let a = -MG_HW; a <= MG_HW && ok; a++) {
+        const o = cell(a, f)
+        const m = matMap[o]
+        if (!openLand(o) && !((m === 4 || m === 5) && !parkMap[o] && !houseMap[o])) ok = false
+        else count.set(floorMap[o], (count.get(floorMap[o]) || 0) + 1)
+      }
+      if (!ok) break
+      let floor = prev
+      let most = 0
+      for (const [h, n] of count) if (n > most || (n === most && Math.abs(h - prev) < Math.abs(floor - prev))) { most = n; floor = h }
+      floor = clamp(floor, prev - 2, prev + 2) // gentle steps from one terrace to the next
+      let fits = true
+      for (let a = -MG_HW; a <= MG_HW; a++) {
+        const d = floorMap[cell(a, f)] - floor
+        if (d > MG_CUT || d < -MG_FILL) fits = false
+      }
+      if (!fits) break
+      rowF.push(floor)
+      prev = floor
+    }
+    return rowF
+  }
+  /** how deep a back garden goes in n rows that will take it: the deepest of MG_DEPTH that fits, or 0 */
+  const backDepth = (n) => MG_DEPTH.find((d) => d <= n) || 0
   function museumGardens(cell, c, s, cx, cy, base) {
     const at = (a, f) => [cx + 0.5 + a * c + f * s, cy + 0.5 + a * s - f * c]
     /** the world heading of a way (da, df) in the museum's own across and forward */
@@ -3201,34 +3227,15 @@ export function createScene(initial) {
       }
       for (const f of [-3, 9]) put(P_BENCH, sg * 19, f, base, sg, 0)
     }
-    // the back garden: how many rows behind the grounds will take it, each row levelled to its own floor
-    const rowF = []
-    let prev = base
-    for (let g = 0; g < MG_DEPTH[0]; g++) {
-      const f = MG_B - 1 - g
-      const count = new Map()
-      let ok = true
-      for (let a = -MG_HW; a <= MG_HW && ok; a++) {
-        const o = cell(a, f)
-        if (!openLand(o)) ok = false
-        else count.set(floorMap[o], (count.get(floorMap[o]) || 0) + 1)
-      }
-      if (!ok) break
-      let floor = prev
-      let most = 0
-      for (const [h, n] of count) if (n > most || (n === most && Math.abs(h - prev) < Math.abs(floor - prev))) { most = n; floor = h }
-      floor = clamp(floor, prev - 2, prev + 2) // gentle steps from one terrace to the next
-      let fits = true
-      for (let a = -MG_HW; a <= MG_HW; a++) if (Math.abs(floorMap[cell(a, f)] - floor) > 3) fits = false
-      if (!fits) break
-      rowF.push(floor)
-      prev = floor
-    }
-    const D = MG_DEPTH.find((d) => d <= rowF.length) || 0
+    // the back garden, each row levelled to its own floor
+    const rowF = museumBackRows(cell, base)
+    const D = backDepth(rowF.length)
     if (!D) return { sides, depth: 0 }
     const avenue = D >= 22
     const gEnd = D - 2 // the last two rows are the terrace the statue closes
     const gFount = 14 + Math.floor((gEnd - 14) / 2)
+    // the statues along the avenue, either side behind the cypresses, from its head, between the benches
+    const avenueStatue = (g) => g >= 14 && (g - 14) % 8 === 0 && g < gEnd - 2
     for (let g = 0; g < D; g++) {
       const f = MG_B - 1 - g
       const floor = rowF[g]
@@ -3237,28 +3244,32 @@ export function createScene(initial) {
         const A = Math.abs(a)
         const walk = () => lay(o, (a + g) & 1 ? 4 : 5, floor, 0)
         if (g <= 1 || (g >= 12 && g <= 13) || g >= gEnd) {
-          // the cross walks, and the terrace at the far end with the statue and its urns, a cypress either side
-          if (g === D - 1 && A === 0) lay(o, M_PLINTH, floor, 1)
+          // the cross walks, and the terrace at the far end: a statue between urns, a statue either side,
+          // cypresses
+          if (g === D - 1 && (A === 0 || A === 12)) lay(o, M_PLINTH, floor, 1)
           else if (g === D - 1 && A === 3) lay(o, M_PLINTH, floor, 2)
-          else if (g === D - 1 && A === 6) lay(o, 34, floor, 'tree')
+          else if (g === D - 1 && (A === 6 || A === 18)) lay(o, 34, floor, 'tree')
           else walk()
           continue
         }
         if (g < 12) {
-          // the parterre: four lawns round a round pink bed in a curved hedge, open on the axis
+          // the parterre: four lawns round a round pink bed with a statue in its middle, in a gravel ring,
+          // open on every side; a statue in the middle of each outer lawn between two cones
           const p = g - 2
           const r = Math.hypot(a, p - 4.5)
-          if (r <= 2.2) pink(o, floor)
-          else if (r <= 3.2 || A <= 1) walk()
-          else if (r <= 3.9) lay(o, M_HEDGE, floor, 1)
+          const mid = p === 4 || p === 5
+          if (A === 0 && mid) lay(o, M_PLINTH, floor, 1)
+          else if (r <= 2.2) pink(o, floor)
+          else if (r <= 3.6 || A <= 1) walk()
           else if (A === 7 || A === 8) walk()
-          else if ((A === 2 || A === 6 || A === 9) && (p === 0 || p === 9)) lay(o, 36, floor, 2)
-          else if (A === 12 && (p === 4 || p === 5)) lay(o, 36, floor, 3)
-          else if (A === 15 && p % 3 !== 2) pink(o, floor)
+          else if (A === 14 && mid) lay(o, M_PLINTH, floor, 1)
+          else if ((A === 2 || A === 6 || A === 9 || A === 19) && (p === 0 || p === 9)) lay(o, 36, floor, 2)
+          else if ((A === 11 || A === 17) && mid) lay(o, 36, floor, 3)
+          else if (A === 20 && p % 3 !== 2) pink(o, floor)
           else lawnCell(o, floor)
           continue
         }
-        // the avenue: striped grass, gravel walks, cypresses, cones and balls, a fountain halfway
+        // the avenue: striped grass, gravel walks, cypresses, statues, cones and balls, a fountain halfway
         const r = Math.hypot(a, g - gFount)
         if (avenue && r <= 2.9) {
           if (r < 0.6) lay(o, M_PLINTH, floor, 2)
@@ -3267,9 +3278,10 @@ export function createScene(initial) {
         } else if (A <= 3) lay(o, (g >> 1) & 1 ? M_LAWN : 8, floor, 0)
         else if (A <= 5) walk()
         else if (A === 7 && (g - 14) % 3 === 0) lay(o, 34, floor, 'tree')
-        else if (A === 11 && g % 4 === 0) lay(o, 36, floor, 3)
+        else if (A === 9 && avenueStatue(g)) lay(o, M_PLINTH, floor, 1)
+        else if ((A === 11 || A === 17) && g % 4 === 0) lay(o, 36, floor, 3)
         else if (A === 14 && g % 4 === 2) lay(o, 36, floor, 2)
-        else if (A === 16 && g % 4 !== 3) pink(o, floor)
+        else if (A === 20 && g % 4 !== 3) pink(o, floor)
         else lawnCell(o, floor)
       }
     }
@@ -3280,14 +3292,22 @@ export function createScene(initial) {
         if (!parkMap[o] && !houseMap[o] && isTree(matMap[o])) { heightMap[o] = floorMap[o]; matMap[o] = 6 }
       }
     }
-    // benches: at the ends of the near cross walk facing the parterre, along the avenue facing the grass
+    // benches: at the ends of the near cross walk facing the statues on the outer lawns, along the avenue
+    // facing the grass. The statues stand on their plinths, one high: in the parterre the middle one looks
+    // to the museum and the outer ones to the axis, along the avenue they face the axis, and on the far
+    // terrace they look back down the garden to the museum.
     const fAt = (g) => MG_B - 1 - g
+    const statue = (pose, a, g, da, df) => put(pose, a, fAt(g), Math.max(rowF[Math.floor(g)], rowF[Math.ceil(g)]) + 1, da, df)
+    statue(0, 0, 6.5, 0, 1)
     for (const sg of [-1, 1]) {
-      put(P_BENCH, sg * 12, fAt(13), rowF[13] ?? base, 0, 1)
+      put(P_BENCH, sg * 14, fAt(13), rowF[13] ?? base, 0, 1)
+      statue(sg < 0 ? 1 : 0, sg * 14, 6.5, -sg, 0)
       for (let g = 18; g < gEnd - 2; g += 8) put(P_BENCH, sg * 5, fAt(g), rowF[g], -sg, 0)
+      for (let g = 14; avenueStatue(g); g += 8) statue((g >> 3) & 1, sg * 9, g, -sg, 0)
       put(P_URN, sg * 3, fAt(D - 1), rowF[D - 1] + 2, 0, 1)
+      statue(0, sg * 12, D - 1, 0, 1)
     }
-    put(1, 0, fAt(D - 1), rowF[D - 1] + 1, 0, 1) // the statue looks back down the garden to the museum
+    statue(1, 0, D - 1, 0, 1)
     if (avenue) {
       const [x, y] = at(0, fAt(gFount))
       fountains.push({ x, y, z: rowF[gFount] + 2, alive: true })
@@ -3344,10 +3364,13 @@ export function createScene(initial) {
       for (let k = 0; k < 4; k++) {
         const yaw = (k * Math.PI) / 2 - Math.PI / 2
         const score = bonus + sunward(yaw) + (Math.abs(wrapAngle(yaw - toChapel)) < 0.1 ? 4 : Math.abs(wrapAngle(yaw - toChapel)) < 2 ? 2 : 0) - dc / 25 - wood * WOOD_K
-        if (score <= bestScore) continue
+        if (score + MG_DEPTH[0] * MG_ROW_K <= bestScore) continue
         const base = museumSite(cx, cy, yaw, rock)
         if (base < 0) continue
-        bestScore = score
+        // and room behind it for the back garden: the deeper the better
+        const depth = backDepth(museumBackRows(turned(cx, cy, yaw), base).length)
+        if (score + depth * MG_ROW_K <= bestScore) continue
+        bestScore = score + depth * MG_ROW_K
         best = { cx, cy, yaw, base, rock: !!rock, wood }
       }
     }
@@ -3399,7 +3422,7 @@ export function createScene(initial) {
     }
     const gardens = museumGardens(cell, c, s, cx, cy, base)
     // the trees round the grounds and the gardens are cleared, so it stands in a clearing
-    const reach = gardens.sides ? MG_SIDE[0] : MG_A
+    const reach = Math.max(gardens.sides ? MG_SIDE[0] : MG_A, gardens.depth ? MG_HW : 0)
     clearRound(cell, -reach, reach, MG_B - 1 - gardens.depth, MG_F, CLEARING)
     // the nearest villa, and a gravel path on to it from the forecourt
     let near = null
