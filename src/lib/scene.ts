@@ -2815,7 +2815,7 @@ export function createScene(initial) {
   /** a front facing −x or −y is turned to the sun (see voxBegin's light), and is worth this much more */
   const sunward = (yaw) => (Math.sin(yaw) < -0.5 || Math.cos(yaw) > 0.5 ? 5 : 0)
   /** a gravel path from (x, y) towards the middle of a house, until it meets its yard; how many cells it laid */
-  function gravelPath(x, y, hx, hy, lastH) {
+  function gravelPath(x, y, hx, hy, lastH, clear = 0) {
     let n = 0
     for (let step = 0; step < 90; step++) {
       const o = ((y & NM) << NSHIFT) | (x & NM)
@@ -2827,6 +2827,13 @@ export function createScene(initial) {
         heightMap[o] = floorMap[o]
         parkMap[o] = 3
         n++
+        // through a wood, the trees either side are cleared, so the way in is open
+        for (let dy = -clear; dy <= clear; dy++) {
+          for (let dx = -clear; dx <= clear; dx++) {
+            const q = (((y + dy) & NM) << NSHIFT) | ((x + dx) & NM)
+            if (!parkMap[q] && !houseMap[q] && isTree(matMap[q])) { heightMap[q] = floorMap[q]; matMap[q] = 6 }
+          }
+        }
       }
       lastH = floorMap[o]
       const dx = Math.round(wrapDelta(hx, x))
@@ -2837,6 +2844,43 @@ export function createScene(initial) {
     }
     return n
   }
+  /** how much of the land within r of (cx, cy) is wood, from 0 to 1 */
+  function woodAround(cx, cy, r) {
+    let n = 0
+    let t = 0
+    for (let dy = -r; dy <= r; dy += 3) {
+      for (let dx = -r; dx <= r; dx += 3) {
+        if (dx * dx + dy * dy > r * r) continue
+        const m = matMap[(((cy + dy) & NM) << NSHIFT) | ((cx + dx) & NM)]
+        if (m < 4) continue
+        n++
+        if (isTree(m)) t++
+      }
+    }
+    return n ? t / n : 0
+  }
+  /**
+   * clears the trees round a garden, in cell(a, f): those within about m of the rectangle a0…a1, f0…f1,
+   * with round corners and an edge that comes and goes, so it opens on to a clearing, not a cut
+   */
+  function clearRound(cell, a0, a1, f0, f1, m) {
+    const am = (a0 + a1) / 2
+    const fm = (f0 + f1) / 2
+    for (let f = f0 - m - 4; f <= f1 + m + 4; f++) {
+      for (let a = a0 - m - 4; a <= a1 + m + 4; a++) {
+        const da = a < a0 ? a0 - a : a > a1 ? a - a1 : 0
+        const df = f < f0 ? f0 - f : f > f1 ? f - f1 : 0
+        const ang = Math.atan2(f - fm, a - am)
+        if (Math.hypot(da, df) > m + 2.5 * Math.sin(ang * 3 + 1) + 1.5 * Math.sin(ang * 7 + 2)) continue
+        const o = cell(a, f)
+        if (!parkMap[o] && !houseMap[o] && isTree(matMap[o])) { heightMap[o] = floorMap[o]; matMap[o] = 6 }
+      }
+    }
+  }
+  const WOOD_R = 40 // how far round a site the chapel and the museum look at the wood …
+  const WOOD_K = 40 // … and how much they mind it: all wood counts as much as four villas near the chapel
+  const CLEARING = 14 // how far the trees are cleared round their gardens
+  const PATH_CLEAR = 2 // and either side of their paths
   /** a monument's own cells: a stone floor nobody walks on, and how high it stands over each */
   function monumentCell(o, base, M, a, f) {
     heightMap[o] = floorMap[o] = base
@@ -2904,7 +2948,7 @@ export function createScene(initial) {
           }
           if (!ok) continue
           const yaw = facing(cx, cy, hx, hy)
-          const score0 = near * 10 + sunward(yaw) - Math.hypot(wrapDelta(cx, spawnX), wrapDelta(cy, spawnY)) / 25
+          const score0 = near * 10 + sunward(yaw) - Math.hypot(wrapDelta(cx, spawnX), wrapDelta(cy, spawnY)) / 25 - woodAround(cx, cy, WOOD_R) * WOOD_K
           // the biggest garden that fits here
           for (let gi = 0; gi < CHAPEL_GARDENS.length; gi++) {
             const score = score0 + (CHAPEL_GARDENS.length - 1 - gi) * 4
@@ -2912,7 +2956,7 @@ export function createScene(initial) {
             const base = chapelSite(cx, cy, yaw, CHAPEL_GARDENS[gi])
             if (base < 0) continue
             bestScore = score
-            best = { cx, cy, yaw, base, hx, hy, near, G: CHAPEL_GARDENS[gi] }
+            best = { cx, cy, yaw, base, hx, hy, near, G: CHAPEL_GARDENS[gi], wood: woodAround(cx, cy, WOOD_R) }
             break
           }
         }
@@ -2944,16 +2988,8 @@ export function createScene(initial) {
         parkMap[o] = 3
       }
     }
-    // the trees near the hedge are cleared, to a clearing of grass round the garden
-    for (let f = GARDEN_B - 9; f <= G.front + 9; f++) {
-      for (let a = -GARDEN_A - 9; a <= GARDEN_A + 9; a++) {
-        const o = cell(a, f)
-        if (!parkMap[o] && !houseMap[o] && isTree(matMap[o])) {
-          heightMap[o] = floorMap[o]
-          matMap[o] = 6
-        }
-      }
-    }
+    // the trees round the hedge are cleared, to a clearing of grass round the garden
+    clearRound(cell, -GARDEN_A, GARDEN_A, GARDEN_B, G.front, CLEARING)
     // a lamp at each front corner of the square and either side of the gate, a cypress outside it
     const at = (a, f) => [cx + 0.5 + a * Math.round(Math.cos(yaw)) + f * Math.round(Math.sin(yaw)), cy + 0.5 + a * Math.round(Math.sin(yaw)) - f * Math.round(Math.cos(yaw))]
     for (const [a, f] of [[-4, Math.floor(CH_FORE)], [4, Math.floor(CH_FORE)], [-2, G.front - 1], [2, G.front - 1]]) {
@@ -2967,12 +3003,12 @@ export function createScene(initial) {
       heightMap[o] = floorMap[o] + 8 + (a > 0 ? 1 : 0)
     }
     const [px, py] = at(0, G.front + 1)
-    const pathN = gravelPath(Math.floor(px), Math.floor(py), hx, hy, base)
+    const pathN = gravelPath(Math.floor(px), Math.floor(py), hx, hy, base, PATH_CLEAR)
     chapel = { x: cx + 0.5, y: cy + 0.5, z: base, yaw }
     monumentModel(M, 0)
     monumentModel(M, 1)
     worldLog.info('chapel', {
-      at: [cx, cy], villas: best.near, garden: G.front - GARDEN_B + 1, cones, path: pathN,
+      at: [cx, cy], villas: best.near, garden: G.front - GARDEN_B + 1, cones, path: pathN, wood: Math.round(best.wood * 100) / 100,
       fromSpawn: Math.round(Math.hypot(wrapDelta(cx, spawnX), wrapDelta(cy, spawnY))),
     })
   }
@@ -3304,14 +3340,15 @@ export function createScene(initial) {
       if (dc < 50) continue
       if (houses.some((h) => { const [hx, hy] = mid(h); return wrapDelta(hx, cx) ** 2 + wrapDelta(hy, cy) ** 2 < 28 * 28 })) continue
       const toChapel = facing(cx, cy, chapel.x, chapel.y)
+      const wood = woodAround(cx, cy, WOOD_R)
       for (let k = 0; k < 4; k++) {
         const yaw = (k * Math.PI) / 2 - Math.PI / 2
-        const score = bonus + sunward(yaw) + (Math.abs(wrapAngle(yaw - toChapel)) < 0.1 ? 4 : Math.abs(wrapAngle(yaw - toChapel)) < 2 ? 2 : 0) - dc / 25
+        const score = bonus + sunward(yaw) + (Math.abs(wrapAngle(yaw - toChapel)) < 0.1 ? 4 : Math.abs(wrapAngle(yaw - toChapel)) < 2 ? 2 : 0) - dc / 25 - wood * WOOD_K
         if (score <= bestScore) continue
         const base = museumSite(cx, cy, yaw, rock)
         if (base < 0) continue
         bestScore = score
-        best = { cx, cy, yaw, base, rock: !!rock }
+        best = { cx, cy, yaw, base, rock: !!rock, wood }
       }
     }
     if (!best) {
@@ -3334,7 +3371,7 @@ export function createScene(initial) {
         parkMap[o] = 3
       }
     }
-    // the rock and the trees round the grounds are cleared to grass, the rock levelled to the grounds
+    // the rock round the grounds is cleared to grass, levelled to the grounds (the trees go below)
     for (let f = MG_B - 12; f <= MG_F + 12; f++) {
       for (let a = -MG_A - 12; a <= MG_A + 12; a++) {
         const o = cell(a, f)
@@ -3342,9 +3379,6 @@ export function createScene(initial) {
         if (isRock(matMap[o])) {
           matMap[o] = 6
           heightMap[o] = floorMap[o] = base
-        } else if (isTree(matMap[o]) && Math.abs(a) <= MG_A + 8 && f >= MG_B - 8 && f <= MG_F + 8) {
-          heightMap[o] = floorMap[o]
-          matMap[o] = 6
         }
       }
     }
@@ -3364,6 +3398,9 @@ export function createScene(initial) {
       }
     }
     const gardens = museumGardens(cell, c, s, cx, cy, base)
+    // the trees round the grounds and the gardens are cleared, so it stands in a clearing
+    const reach = gardens.sides ? MG_SIDE[0] : MG_A
+    clearRound(cell, -reach, reach, MG_B - 1 - gardens.depth, MG_F, CLEARING)
     // the nearest villa, and a gravel path on to it from the forecourt
     let near = null
     let nd = 1e9
@@ -3374,12 +3411,12 @@ export function createScene(initial) {
       if (d < nd) { nd = d; near = [hx, hy] }
     }
     const [px, py] = at(0, MG_F + 1)
-    const pathN = near ? gravelPath(Math.floor(px), Math.floor(py), near[0], near[1], base) : 0
+    const pathN = near ? gravelPath(Math.floor(px), Math.floor(py), near[0], near[1], base, PATH_CLEAR) : 0
     museum = { x: cx + 0.5, y: cy + 0.5, z: base, yaw }
     monumentModel(M, 0)
     monumentModel(M, 1)
     worldLog.info('museum', {
-      at: [cx, cy], onRock: best.rock, rocks: rocks.length, path: pathN, sideGardens: gardens.sides, backGarden: gardens.depth,
+      at: [cx, cy], onRock: best.rock, rocks: rocks.length, path: pathN, wood: Math.round(best.wood * 100) / 100, sideGardens: gardens.sides, backGarden: gardens.depth,
       fromChapel: Math.round(Math.hypot(wrapDelta(chapel.x, cx), wrapDelta(chapel.y, cy))),
     })
   }
@@ -4150,7 +4187,7 @@ export function createScene(initial) {
     const o = ((y & NM) << NSHIFT) | (x & NM)
     if (houseMap[o] || parkMap[o] === 4) return false // a house, the chapel, the temple
     const m = matMap[o]
-    if (isTrunk(m) || m === 34) return false // tree trunk or cypress; the canopy can be walked under
+    // a tree (trunk, canopy, a cypress) does not stop anyone: it is walked through, on the ground under it
     if (isBuilt(m)) return false
     if (m === M_HEDGE || m === M_POOL || m === M_PLINTH) return false // the hedge, the fountain, a statue
     return m >= 4
@@ -4158,7 +4195,7 @@ export function createScene(initial) {
   function walkFloor(x, y) {
     const o = (((y | 0) & NM) << NSHIFT) | ((x | 0) & NM)
     const m = matMap[o]
-    if (isTree(m)) return floorMap[o]
+    if (isTree(m) || m === 34) return floorMap[o]
     return heightMap[o]
   }
   function nearestStand(x, y, reach, spawn) {
