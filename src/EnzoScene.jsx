@@ -61,6 +61,8 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const [aboard, setAboard] = useState(false)
   const [footView, setFootView] = useState('above')
   const [canBoard, setCanBoard] = useState(false) // a boat in reach on foot, or a shore aboard
+  const [indoors, setIndoors] = useState(false) // walking the gallery inside the museum
+  const indoorsRef = useRef(false)
   // the first time aboard, how to sail glows softly in the hint until the boat sails or is left
   const [sailCue, setSailCue] = useState(false)
   const sailCueRef = useRef(false)
@@ -205,6 +207,10 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       last = now
       if (!scene.width) return
       scene.step(dt)
+      if (scene.indoors !== indoorsRef.current) {
+        indoorsRef.current = scene.indoors
+        setIndoors(scene.indoors)
+      }
       if (sailCueRef.current && (scene.sailing || !scene.aboard)) {
         sailCueRef.current = false
         setSailCue(false)
@@ -497,6 +503,8 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   }
   const hints = buttons ? TOUCH_HINTS : HINTS
   const footHint = !onFoot ? null
+    : indoors
+      ? (buttons ? 'Drag to walk round the gallery · Walk out by the door · Fly back to the plane' : 'WASD walks round the gallery · Walk out by the door · V back to the plane')
     : buttons
       ? (aboard
         ? `Tap to sail or stop · Drag the way to steer · Ashore near land · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`
@@ -575,7 +583,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       </div>
       {showHint && (
         <div
-          className={`pointer-events-none absolute inset-x-0 flex justify-center px-4 transition-opacity duration-700 ${buttons || hint.mode === 'cockpit' || (onFoot && footView === 'first') ? 'top-4' : 'bottom-4'}`}
+          className={`pointer-events-none absolute inset-x-0 flex justify-center px-4 transition-opacity duration-700 ${buttons || hint.mode === 'cockpit' || (onFoot && (footView === 'first' || indoors)) ? 'top-4' : 'bottom-4'}`}
           style={{ opacity: onFoot || hint.on ? 1 : 0 }}
         >
           <p
@@ -625,18 +633,20 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
               {aboard ? 'Ashore' : 'Board'}
             </button>
           )}
-          <button
-            type="button"
-            aria-label="Change view"
-            className={`${buttonLook} border-white/30 bg-[#0b1a33]/60 active:bg-[#0b1a33]/90`}
-            style={{ left: 'max(14px, env(safe-area-inset-left))', bottom: 'max(14px, env(safe-area-inset-bottom))', touchAction: 'none' }}
-            onClick={nextView}
-            onPointerDown={mine}
-            onPointerMove={mine}
-            onPointerUp={mine}
-          >
-            View
-          </button>
+          {!indoors && (
+            <button
+              type="button"
+              aria-label="Change view"
+              className={`${buttonLook} border-white/30 bg-[#0b1a33]/60 active:bg-[#0b1a33]/90`}
+              style={{ left: 'max(14px, env(safe-area-inset-left))', bottom: 'max(14px, env(safe-area-inset-bottom))', touchAction: 'none' }}
+              onClick={nextView}
+              onPointerDown={mine}
+              onPointerMove={mine}
+              onPointerUp={mine}
+            >
+              View
+            </button>
+          )}
           {!onFoot && (
             <>
               <button

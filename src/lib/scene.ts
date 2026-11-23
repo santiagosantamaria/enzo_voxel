@@ -16,6 +16,7 @@ import {
 } from './jet-model.ts'
 import { buildCockpit, drawCockpit } from './cockpit.ts'
 import { log } from './log.ts'
+import { createMuseumRoom } from './museum-room.ts'
 
 const worldLog = log.child('world')
 const footLog = log.child('foot')
@@ -436,6 +437,8 @@ const YACHT_COL = [
   [228, 220, 200], [184, 110, 70], [146, 154, 164], [222, 184, 84],
   // the garden temple: knapped flint, dark and pale, limestone, the ochre plaster of the niche's vault
   [92, 96, 104], [152, 154, 152], [206, 196, 172], [206, 150, 100],
+  // the museum: cream stucco, the darker joints of its rusticated ground floor, the sculpted frieze, its red banners
+  [240, 228, 200], [206, 190, 158], [218, 188, 136], [172, 44, 50],
   // lamps: the glass of an unlit lantern; then a lit lantern, the same in every shade and kept from
   // the night's grading. Lamps stay last: k >= YM_LAMP is what makes a material a lamp.
   [196, 206, 200], [255, 208, 128],
@@ -468,8 +471,12 @@ const YM_FLINT = 46
 const YM_FLINT2 = 47
 const YM_LIME = 48
 const YM_OCHRE = 49
-const YM_GLASS = 50
-const YM_LAMP = 51
+const YM_CREAM = 50
+const YM_JOINT = 51
+const YM_RELIEF = 52
+const YM_BANNER = 53
+const YM_GLASS = 54
+const YM_LAMP = 55
 const YM_WINDOW = 8 // a boat's deckhouse windows and its open hatch: lit from inside at night
 // the glow round each kind of lamp (packed like the frame: 0xAABBGGRR)
 const LAMP_WARM_GLOW = 0xff3c96ff // 255, 150, 60
@@ -951,10 +958,14 @@ const TP_COLS = [-4.0, -2.95, 2.95, 4.0] // the columns, across
 const TP_COL_F = 1.25 // and forward
 // the speckle of the flint, in squares of a quarter, so every level of detail shows the same stones
 function flintAt(a, f, z) {
-  let h = Math.imul(Math.floor(a * 4), 0x27d4eb2d) ^ Math.imul(Math.floor(f * 4), 0x165667b1) ^ Math.imul(Math.floor(z * 4), 0x9e3779b1)
+  return speck(a, f, z, 4) < 3 ? YM_FLINT2 : YM_FLINT
+}
+/** a hash, 0–7, of the cube of side 1/s the point is in */
+function speck(a, f, z, s) {
+  let h = Math.imul(Math.floor(a * s), 0x27d4eb2d) ^ Math.imul(Math.floor(f * s), 0x165667b1) ^ Math.imul(Math.floor(z * s), 0x9e3779b1)
   h = Math.imul(h ^ (h >>> 15), 0x85ebca6b)
   h ^= h >>> 13
-  return (h & 7) < 3 ? YM_FLINT2 : YM_FLINT
+  return h & 7
 }
 /** the statue in the niche: a young man standing, his cloak over the left arm; h up from his feet, d forward */
 function templeStatue(a, h, d) {
@@ -1051,11 +1062,192 @@ function templeAt(a, f, z) {
   return flintAt(a, f, z)
 }
 
-// The chapel and the temple are built the same way, at three levels of detail, far to near.
+// ── The museum: one on the map, an exhibition hall of cream stucco in the Viennese manner of the 1860s.
+// A raised middle block of three bays: on the ground floor three arched glass doors up a flight of steps,
+// with a marble statue on a pedestal either side of each; over them three tall arched windows, each behind
+// a little balustrade, between engaged columns; then a band of sculpted panels, a frieze with the name in
+// gilt letters (too small to read), a cornice and an attic balustrade, and behind it a glass skylight over
+// the hall. Either side a lower wing with a red banner, and at each end a pavilion standing a little
+// forward. The ground floor is rusticated, the roofs are lead. About 14 tall, 29 across and 16 deep.
+// museumAt(a, f, z) as chapelAt: across, forward (the doors are at +f), up.
+const MU_TOP = 13.8
+const MU_BACK = 7 // the back wall, all along
+const MU_C = 6.5 // the middle block to ±MU_C across, its front at MU_CF, its cornice up to MU_CT
+const MU_CF = 6.5
+const MU_CT = 11.2
+const MU_WING = 11 // the wings to ±MU_WING, …
+const MU_WF = 5.0
+const MU_WT = 9.5
+const MU_SIDE = 14 // … and the end pavilions to ±MU_SIDE
+const MU_PF = 5.6
+const MU_PT = 9.9
+const MU_BAYS = [-3.4, 0, 3.4] // the doors and the windows over them, across
+const MU_COLS = [-5.1, -1.7, 1.7, 5.1] // the statues, and the columns over them
+const MU_BANNER = 8.75 // the middle of each wing, across
+const MU_END = 12.5 // the middle of each pavilion
+const MU_SIDE_WIN = [-5, -2, 1, 4] // the windows along each end, forward
+/** how far a block's walls stand out at height z, its cornice's top at T: the plinth, the string course, the cornice */
+function muProj(z, T) {
+  if (z < 0.8) return 0.3
+  if (z >= 5.2 && z < 5.7) return 0.25
+  if (z >= T - 0.6) return 0.45
+  if (z >= T - 0.8) return 0.2
+  return 0
+}
+/** a balustrade h high, zz up from its foot, u along it: a rail at the foot and at the top, balusters between */
+function muRail(zz, h, u) {
+  if (zz < 0.2 || zz >= h - 0.2) return YM_CREAM
+  return u / 0.4 - Math.floor(u / 0.4) < 0.5 ? YM_CREAM : 0
+}
+function museumAt(a, f, z) {
+  const A = Math.abs(a)
+  if (A > MU_SIDE + 0.5 || f < -MU_BACK - 0.5 || f > 9.1 || z > MU_TOP) return 0
+  // the steps up to the doors
+  if (A <= 5.6 && f > MU_CF && z < (f <= 7.6 ? 0.8 : f <= 8.3 ? 0.53 : f <= 9.0 ? 0.27 : 0)) return YM_CREAM
+  // what stands before the middle block: the statues on their pedestals, the columns, the balustrades
+  if (f > MU_CF && A <= MU_C) {
+    if (z >= 0.8 && z < 4.2 && f < MU_CF + 1.0) {
+      for (const ac of MU_COLS) {
+        const da = a - ac
+        if (Math.abs(da) > 0.7) continue
+        const df = f - (MU_CF + 0.5)
+        if (z < 1.9) {
+          const r = z < 1.0 || z >= 1.75 ? 0.45 : 0.38
+          return Math.abs(da) <= r && Math.abs(df) <= r ? YM_CREAM : 0
+        }
+        return templeStatue((Math.sign(ac) * da) / 0.8, (z - 1.9) / 0.8, df / 0.8) ? YM_MARBLE : 0
+      }
+    }
+    if (z >= 5.7 && z < 9.3) {
+      for (const ac of MU_COLS) {
+        const r = Math.hypot(a - ac, f - MU_CF)
+        if (z < 5.9 ? r <= 0.42 : z < 8.95 ? r <= 0.3 : z < 9.1 ? r <= 0.38 : Math.max(Math.abs(a - ac), f - MU_CF) <= 0.45) return YM_CREAM
+      }
+      if (z < 6.5 && f <= MU_CF + 0.45) {
+        for (const ac of MU_BAYS) if (Math.abs(a - ac) <= 1.05) return muRail(z - 5.7, 0.8, a - ac + 1.05)
+      }
+    }
+  }
+  // the pilasters at the corners of each pavilion, and the gilt rod each banner hangs from
+  if (A > MU_WING && f > MU_PF && f <= MU_PF + 0.2 && z >= 5.7 && z < MU_PT - 0.8 && (A <= 11.6 || A >= 13.4)) return YM_CREAM
+  if (A > MU_C && A <= MU_WING && f > MU_WF && f <= MU_WF + 0.2 && z >= 8.85 && z < 9.0 && Math.abs(A - MU_BANNER) <= 0.85) return YM_GOLD
+  // the walls of the three blocks, the middle first: the plinth, the string course and the cornice stand out from them
+  let p = muProj(z, MU_CT)
+  if (z < MU_CT && A <= MU_C + p && f <= MU_CF + p && f >= -MU_BACK - p) return muWall(0, a, A, f, z)
+  p = muProj(z, MU_WT)
+  if (z < MU_WT && A <= MU_WING + p && f <= MU_WF + p && f >= -MU_BACK - p) return muWall(1, a, A, f, z)
+  p = muProj(z, MU_PT)
+  if (z < MU_PT && A > MU_WING && A <= MU_SIDE + p && f <= MU_PF + p && f >= -MU_BACK - p) return muWall(2, a, A, f, z)
+  // on the roofs: the attic over the middle and the skylight behind it, and a balustrade round the wings and pavilions
+  if (A <= MU_C) {
+    if (z < MU_CT || z >= MU_CT + 1.4) return museumSkylight(a, A, f, z)
+    const dF = MU_CF - f
+    const dB = f + MU_BACK
+    const dS = MU_C - A
+    const din = Math.min(dF, dB, dS)
+    if (din < 0) return 0
+    if (din > 0.5) return museumSkylight(a, A, f, z)
+    const u = dS <= 0.5 ? f : a
+    // a die at each corner, over each column, and every 3 along the sides and the back
+    const corner = (dF <= 0.5 ? 1 : 0) + (dB <= 0.5 ? 1 : 0) + (dS <= 0.5 ? 1 : 0) > 1
+    if (corner || (dF <= 0.5 ? MU_COLS.some((ac) => Math.abs(a - ac) < 0.35) : Math.abs(u / 3 - Math.round(u / 3)) < 0.1)) return YM_CREAM
+    return muRail(z - MU_CT, 1.4, u)
+  }
+  if (A <= MU_WING) {
+    if (z < MU_WT || z >= MU_WT + 0.9) return 0
+    const din = Math.min(MU_WF - f, f + MU_BACK)
+    if (din < 0 || din > 0.5) return 0
+    return A >= MU_WING - 0.4 || A <= MU_C + 0.4 ? YM_CREAM : muRail(z - MU_WT, 0.9, a)
+  }
+  if (z < MU_PT) return 0
+  const dF = MU_PF - f
+  const dB = f + MU_BACK
+  const dS = MU_SIDE - A
+  // a ball on a die at each outer corner
+  if (dS <= 0.5 && (dF <= 0.5 || dB <= 0.5)) {
+    if (z < MU_PT + 0.9) return dS >= 0 && dF >= 0 && dB >= 0 ? YM_CREAM : 0
+    const df = dF <= 0.5 ? f - (MU_PF - 0.25) : f + MU_BACK - 0.25
+    return (A - 13.75) ** 2 + df * df + (z - MU_PT - 1.25) ** 2 <= 0.35 ** 2 ? YM_CREAM : 0
+  }
+  if (z >= MU_PT + 0.9) return 0
+  const din = Math.min(dF, dB, dS)
+  if (din < 0 || din > 0.5) return 0
+  return muRail(z - MU_PT, 0.9, dS <= 0.5 ? f : a)
+}
+/** the glass skylight over the middle of the hall: a low hipped roof of glass in an iron grid, on a stucco curb */
+function museumSkylight(a, A, f, z) {
+  if (A > 3.8 || f < -5 || f > 3.6 || z < MU_CT) return 0
+  if (z < MU_CT + 0.7) return YM_CREAM
+  if (z >= MU_CT + 0.7 + Math.min(3.8 - A, f + 5, 3.6 - f) * 0.5) return 0
+  const rib = Math.abs(a - 0.9 * Math.round(a / 0.9)) < 0.1 || Math.abs(f - 0.9 * Math.round(f / 0.9)) < 0.1
+  return rib ? YM_IRON : YM_GLASS
+}
+/** the wall of block b (0 the middle, 1 a wing, 2 a pavilion) at a point inside it or its mouldings */
+function muWall(b, a, A, f, z) {
+  const T = b === 0 ? MU_CT : b === 1 ? MU_WT : MU_PT
+  const front = b === 0 ? MU_CF : b === 1 ? MU_WF : MU_PF
+  const dF = front - f
+  const dB = f + MU_BACK
+  const dS = (b === 0 ? MU_C : MU_SIDE) - A
+  // the lead roof inside the cornice
+  const inner = Math.min(dF, dB, b === 0 ? dS : b === 2 ? Math.min(dS, A - MU_WING) : 1e9)
+  if (z >= T - 0.15 && inner > 0.5) return YM_LEAD
+  if (z < 0.8) return YM_JOINT
+  if (z >= T - 0.8 || (z >= 5.2 && z < 5.7)) return YM_CREAM
+  // the face it is nearest, and how deep in from it; only the front, the back and the ends have openings
+  let d = dF
+  let face = 0
+  if (dB < d) { d = dB; face = 1 }
+  if (b === 2 && dS < d) { d = dS; face = 2 }
+  const upper = z >= 5.7
+  const rusticated = z - 0.8 - 0.72 * Math.floor((z - 0.8) / 0.72) < 0.14 ? YM_JOINT : YM_CREAM
+  if (d > 0.6) return upper ? YM_CREAM : rusticated
+  let win = false
+  if (face === 0 && b === 0) {
+    if (!upper) {
+      // the three doors, arched, in smooth arches cut through the rustication
+      for (const ac of MU_BAYS) {
+        const du = Math.abs(a - ac)
+        if (du >= 1.25 || z >= 4.85) continue
+        const r2 = du * du + (z - 3.6) ** 2
+        if (z < 3.6 ? du < 0.95 : r2 < 0.95 * 0.95) return d < 0.35 ? 0 : YM_WINDOW
+        if (z < 3.6 || r2 < 1.25 * 1.25) return YM_CREAM
+      }
+      return rusticated
+    }
+    if (z < 9.3) {
+      for (const ac of MU_BAYS) {
+        const du = a - ac
+        if (Math.abs(du) < 0.8 && z > 6.5 && (z < 8.5 || du * du + (z - 8.5) ** 2 < 0.64)) win = true
+      }
+    } else if (z < 9.85) {
+      return speck(a, f, z, 4) < 3 ? YM_JOINT : YM_RELIEF // the sculpted panels
+    } else if (A <= 3.6 && z >= 9.97 && z < 10.28) {
+      // the name, in gilt letters
+      const col = Math.floor((a + 3.6) / 0.24)
+      if (col % 4 !== 3 && speck(col, 0, Math.floor((z - 9.97) / 0.1), 1) < 6) return YM_GOLD
+    }
+  } else if (face === 0) {
+    const du = Math.abs(A - (b === 1 ? MU_BANNER : MU_END))
+    if (!upper) win = du < 0.65 && z > 1.8 && z < 3.9
+    else if (b === 1) {
+      // a red banner on the wall, with a pale band near its foot
+      if (du <= 0.7 && z >= 6.1 && z < 8.9) return d > 0.3 || (z >= 6.55 && z < 6.75) ? YM_CREAM : YM_BANNER
+    } else win = du < 0.6 && z > 6.4 && (z < 8.2 || du * du + (z - 8.2) ** 2 < 0.36)
+  } else {
+    const du = face === 1 ? a - 3 * Math.round(a / 3) : Math.min(...MU_SIDE_WIN.map((w) => Math.abs(f - w)))
+    win = Math.abs(du) < 0.6 && (upper ? z > 6.4 && z < 8.6 : z > 1.8 && z < 3.9)
+  }
+  if (win) return d < 0.3 ? 0 : YM_WINDOW
+  return upper ? YM_CREAM : rusticated
+}
+
+// The chapel, the temple and the museum are built the same way, at three levels of detail, far to near.
 const MON_LOD = [0.5, 0.25, 0.125]
 const MONUMENTS = {
   chapel: { at: chapelAt, side: 6.1, back: 6.1, fore: 7.1, top: CH_TOP, reach: 15, mid: 9, models: [], build: null },
   temple: { at: templeAt, side: 5.1, back: 1.8, fore: 2.1, top: TP_TOP, reach: 8, mid: 5.5, models: [], build: null },
+  museum: { at: museumAt, side: 14.5, back: 7.5, fore: 9.1, top: MU_TOP, reach: 17, mid: 6, models: [], build: null },
 }
 /**
  * the surface voxels of a monument at size g, normals from which of their neighbours are empty. It fills
@@ -1351,8 +1543,8 @@ export function createScene(initial) {
     foamCol = pack(fm[0], fm[1], fm[2])
     for (let k = 0; k < NYM; k++) {
       const pale = k === YM_SAIL || k === 12 || k === 7 || k === YM_HULL
-      // the chapel and the temple take the light as the ground does, a little less, so they stand out from it
-      const stone = k >= YM_TRAV && k <= YM_OCHRE
+      // the chapel, the temple and the museum take the light as the ground does, a little less, so they stand out from it
+      const stone = k >= YM_TRAV && k <= YM_BANNER
       let c = stone ? gradeT(YACHT_COL[k], 0.8, 0.85) : gradeT(YACHT_COL[k], 0.42, pale ? 0.22 : 0.32)
       // the fountains are lit from under the water at night
       if (k === YM_SPRAY) c = toward(c, [196, 232, 255], lampK * 0.8)
@@ -1433,12 +1625,13 @@ export function createScene(initial) {
   const birds = []
   // what a cell is part of, so one layout never runs over another:
   // 1 a house and its yard · 2 a villa garden · 3 a lakeside terrace, promenade, path or the chapel's
-  // garden · 4 a monument: the chapel or the temple
+  // garden, the temple's lawn and the museum's grounds · 4 a monument: the chapel, the temple or the museum
   const parkMap = new Uint8Array(N * N)
   // the chapel and the temple: the middle of each, its floor and the way it faces (null if none would
   // fit), and how high they stand over each cell of their footprints, for the plane, the bombs and the camera
   let chapel = null
   let temple = null
+  let museum = null
   const monumentTop = new Map()
   let gardenN = 0
   let flowerN = 0
@@ -1580,6 +1773,7 @@ export function createScene(initial) {
     monumentTop.clear()
     placeChapel()
     placeTemple()
+    placeMuseum()
     placeLamps()
     placeBoats(rnd)
     placeLife(rnd)
@@ -1599,6 +1793,7 @@ export function createScene(initial) {
       viewpoints: views.length,
       chapel: chapel ? [chapel.x | 0, chapel.y | 0] : null,
       temple: temple ? [temple.x | 0, temple.y | 0] : null,
+      museum: museum ? [museum.x | 0, museum.y | 0] : null,
       props: props.length,
       flowers: flowerN,
       spawn: [spawnX | 0, spawnY | 0],
@@ -2776,6 +2971,186 @@ export function createScene(initial) {
     return { base, wood }
   }
 
+  // The museum: one on the map, near the chapel. It goes where a lone outcrop of rock stands on open ground
+  // within MUSEUM_R of the chapel: the rock is cleared and the ground levelled. Where there is no such rock,
+  // it goes on open ground in a ring round the chapel. Its doors face the sun where they can, and else the
+  // chapel. Before them a paved forecourt with a lamp at each corner, cypresses down either side, lawn round
+  // the rest, and a gravel path on to the nearest villa. Like the chapel it takes nothing from the random stream.
+  const MUSEUM_R = 240
+  const isRock = (m) => m >= 12 && m <= 14
+  const isPeak = (m) => m >= 12 && m <= 16 // rock or snow: what a mountain is made of
+  // the grounds, in (a, f) of the museum: the building, then lawn round it and the forecourt before it
+  const MG_A = 17
+  const MG_B = -10
+  const MG_F = 16
+  /** whether (a, f) is a cell the building stands over */
+  const museumCell = (a, f) => {
+    const A = Math.abs(a)
+    return f >= -MU_BACK && (A <= 6 ? f <= 9 : A <= 11 ? f <= 5 : A <= MU_SIDE && f <= 6)
+  }
+  function placeMuseum() {
+    museum = null
+    if (!chapel) return
+    // the outcrops of rock near the chapel, each as a flood fill of its cells (snow too, so a mountain is
+    // one piece): its middle, if it is small
+    const seen = new Set()
+    const rocks = []
+    const R = MUSEUM_R
+    for (let dy = -R; dy <= R; dy += 2) {
+      for (let dx = -R; dx <= R; dx += 2) {
+        const o0 = (((chapel.y + dy) & NM) << NSHIFT) | ((chapel.x + dx) & NM)
+        if (!isPeak(matMap[o0]) || seen.has(o0)) continue
+        const stack = [o0]
+        seen.add(o0)
+        const cells = []
+        let n = 0, sx = 0, sy = 0, x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9
+        while (stack.length && n < 1500) {
+          const o = stack.pop()
+          cells.push(o)
+          const x = o & NM
+          const y = o >> NSHIFT
+          const ux = (chapel.x | 0) + wrapDelta(x, chapel.x)
+          const uy = (chapel.y | 0) + wrapDelta(y, chapel.y)
+          n++; sx += ux; sy += uy
+          x0 = Math.min(x0, ux); x1 = Math.max(x1, ux); y0 = Math.min(y0, uy); y1 = Math.max(y1, uy)
+          for (const q of [((y << NSHIFT) | ((x + 1) & NM)), ((y << NSHIFT) | ((x - 1) & NM)), ((((y + 1) & NM) << NSHIFT) | x), ((((y - 1) & NM) << NSHIFT) | x)]) {
+            if (!seen.has(q) && isPeak(matMap[q])) { seen.add(q); stack.push(q) }
+          }
+        }
+        if (n >= 100 && n < 1500 && x1 - x0 <= 30 && y1 - y0 <= 30) rocks.push({ x: Math.round(sx / n) & NM, y: Math.round(sy / n) & NM, cells: new Set(cells) })
+      }
+    }
+    // where to try: about each outcrop, then a ring round the chapel
+    const spots = []
+    for (const rock of rocks) for (let j = -4; j <= 4; j += 4) for (let i = -4; i <= 4; i += 4) spots.push([(rock.x + i) & NM, (rock.y + j) & NM, rock])
+    for (let k = 0; k < 16; k++) {
+      for (const r of [70, 95, 120, 150]) spots.push([Math.floor(chapel.x + Math.cos((k * Math.PI) / 8) * r) & NM, Math.floor(chapel.y + Math.sin((k * Math.PI) / 8) * r) & NM, null])
+    }
+    let best = null
+    let bestScore = -1e9
+    for (const [cx, cy, rock] of spots) {
+      const bonus = rock ? 20 : 0
+      const dc = Math.hypot(wrapDelta(cx, chapel.x), wrapDelta(cy, chapel.y))
+      if (dc < 50) continue
+      if (houses.some((h) => { const [hx, hy] = mid(h); return wrapDelta(hx, cx) ** 2 + wrapDelta(hy, cy) ** 2 < 28 * 28 })) continue
+      const toChapel = facing(cx, cy, chapel.x, chapel.y)
+      for (let k = 0; k < 4; k++) {
+        const yaw = (k * Math.PI) / 2 - Math.PI / 2
+        const score = bonus + sunward(yaw) + (Math.abs(wrapAngle(yaw - toChapel)) < 0.1 ? 4 : Math.abs(wrapAngle(yaw - toChapel)) < 2 ? 2 : 0) - dc / 25
+        if (score <= bestScore) continue
+        const base = museumSite(cx, cy, yaw, rock)
+        if (base < 0) continue
+        bestScore = score
+        best = { cx, cy, yaw, base, rock: !!rock }
+      }
+    }
+    if (!best) {
+      worldLog.warn('no room for the museum')
+      return
+    }
+    const { cx, cy, yaw, base } = best
+    const cell = turned(cx, cy, yaw)
+    const M = MONUMENTS.museum
+    for (let f = MG_B; f <= MG_F; f++) {
+      for (let a = -MG_A; a <= MG_A; a++) {
+        const o = cell(a, f)
+        if (museumCell(a, f)) { monumentCell(o, base, M, a, f); continue }
+        const A = Math.abs(a)
+        let m = M_LAWN
+        if (A <= 12 && f >= 7) m = A === 12 || f === MG_F ? 52 : 51 // the forecourt, with a darker border
+        else if (A === MU_SIDE + 1 || f === -MU_BACK - 1) m = 51 // a paved walk round the building
+        matMap[o] = m
+        heightMap[o] = floorMap[o] = base
+        parkMap[o] = 3
+      }
+    }
+    // the rock and the trees round the grounds are cleared to grass, the rock levelled to the grounds
+    for (let f = MG_B - 12; f <= MG_F + 12; f++) {
+      for (let a = -MG_A - 12; a <= MG_A + 12; a++) {
+        const o = cell(a, f)
+        if (parkMap[o] || houseMap[o]) continue
+        if (isRock(matMap[o])) {
+          matMap[o] = 6
+          heightMap[o] = floorMap[o] = base
+        } else if (isTree(matMap[o]) && Math.abs(a) <= MG_A + 8 && f >= MG_B - 8 && f <= MG_F + 8) {
+          heightMap[o] = floorMap[o]
+          matMap[o] = 6
+        }
+      }
+    }
+    // a lamp at each corner of the forecourt, and cypresses down either side of it
+    const c = Math.round(Math.cos(yaw))
+    const s = Math.round(Math.sin(yaw))
+    const at = (a, f) => [cx + 0.5 + a * c + f * s, cy + 0.5 + a * s - f * c]
+    for (const [a, f] of [[-12, 7], [12, 7], [-12, MG_F], [12, MG_F]]) {
+      const [x, y] = at(a, f)
+      props.push({ kind: P_LAMP, x, y, z: base, yaw, alive: true })
+    }
+    for (const a of [-MG_A + 1, MG_A - 1]) {
+      for (const f of [8, 11, 14]) {
+        const o = cell(a, f)
+        matMap[o] = 34
+        heightMap[o] = base + 8 + ((a + f) & 1)
+      }
+    }
+    // the nearest villa, and a gravel path on to it from the forecourt
+    let near = null
+    let nd = 1e9
+    for (const h of houses) {
+      if (!isVilla(h)) continue
+      const [hx, hy] = mid(h)
+      const d = Math.hypot(wrapDelta(hx, cx), wrapDelta(hy, cy))
+      if (d < nd) { nd = d; near = [hx, hy] }
+    }
+    const [px, py] = at(0, MG_F + 1)
+    const pathN = near ? gravelPath(Math.floor(px), Math.floor(py), near[0], near[1], base) : 0
+    museum = { x: cx + 0.5, y: cy + 0.5, z: base, yaw }
+    monumentModel(M, 0)
+    monumentModel(M, 1)
+    worldLog.info('museum', {
+      at: [cx, cy], onRock: best.rock, rocks: rocks.length, path: pathN,
+      fromChapel: Math.round(Math.hypot(wrapDelta(chapel.x, cx), wrapDelta(chapel.y, cy))),
+    })
+  }
+  /**
+   * the floor the museum and its grounds would stand on at (cx, cy), the doors towards yaw, clearing the
+   * outcrop rock (or none); -1 if the ground will not do. All of the outcrop must be inside the cleared
+   * ground, and no other rock or snow.
+   */
+  function museumSite(cx, cy, yaw, rock) {
+    const cell = turned(cx, cy, yaw)
+    // the floor is the commonest floor of the open ground the building would stand on
+    const count = new Map()
+    for (let f = -MU_BACK; f <= 9; f += 2) {
+      for (let a = -MU_SIDE; a <= MU_SIDE; a += 2) {
+        const o = cell(a, f)
+        if (!isRock(matMap[o])) count.set(floorMap[o], (count.get(floorMap[o]) || 0) + 1)
+      }
+    }
+    let base = -1
+    let most = 0
+    for (const [h, n] of count) if (n > most) { most = n; base = h }
+    if (base < 2) return -1
+    for (let f = MG_B; f <= MG_F + 1; f++) {
+      for (let a = -MG_A; a <= MG_A; a++) {
+        const o = cell(a, f)
+        const stone = isRock(matMap[o]) && !parkMap[o] && !houseMap[o]
+        if (!stone && !openLand(o)) return -1
+        if (!stone && Math.abs(floorMap[o] - base) > (museumCell(a, f) ? 2 : 3)) return -1
+      }
+    }
+    let mine = 0
+    for (let f = MG_B - 12; f <= MG_F + 12; f++) {
+      for (let a = -MG_A - 12; a <= MG_A + 12; a++) {
+        const o = cell(a, f)
+        if (!isPeak(matMap[o])) continue
+        if (!rock || !rock.cells.has(o)) return -1
+        mine++
+      }
+    }
+    return rock && mine < rock.cells.size ? -1 : base
+  }
+
   // a garden lamp by the end of every bench, a little behind it, so the gardens, the terraces and the
   // promenades are lit at night. It takes nothing from the random stream: the rest stays as it was.
   function placeLamps() {
@@ -3070,6 +3445,9 @@ export function createScene(initial) {
   const fish = []
   const whales = []
   const walker = { x: 0, y: 0, yaw: 0, z: 0 }
+  // inside the museum: the man walks its gallery, drawn by its own renderer (museum-room.ts)
+  const room = createMuseumRoom()
+  let indoors = false
   let onFoot = false
   let footView = 0 // 0 overhead third person, 1 first person
   let aboard = -1
@@ -3607,6 +3985,7 @@ export function createScene(initial) {
     if (onFoot) {
       onFoot = false
       aboard = -1
+      indoors = false
       keyMode = false
       holding = false
       boostKey = false
@@ -3668,7 +4047,7 @@ export function createScene(initial) {
     return true
   }
   function toggleFootView() {
-    if (!onFoot) return
+    if (!onFoot || indoors) return
     footView = footView === 0 ? 1 : 0
   }
   /** a phone: turn the boat, or the plane overhead, to the way a finger drags on the screen (x right, y down),
@@ -3689,7 +4068,7 @@ export function createScene(initial) {
     walkMove = clamp(move, -1, 1)
   }
   function board() {
-    if (!onFoot) return false
+    if (!onFoot || indoors) return false
     if (aboard >= 0) {
       const b = boats[aboard]
       const land = b ? nearestStand(b.x, b.y, 28) : null
@@ -3795,6 +4174,10 @@ export function createScene(initial) {
   }
   function stepFoot(dt) {
     if (!onFoot) return
+    if (indoors) {
+      if (room.step(dt, walkTurn, walkMove)) leaveMuseum()
+      return
+    }
     if (aboard >= 0) {
       const b = boats[aboard]
       if (!b) { aboard = -1; return }
@@ -3835,12 +4218,49 @@ export function createScene(initial) {
       const spd = walkMove * 20
       const nx = walker.x + Math.sin(walker.yaw) * spd * dt
       const ny = walker.y - Math.cos(walker.yaw) * spd * dt
+      if (atMuseumDoor(nx, ny)) {
+        enterMuseum()
+        return
+      }
       if (canStep(walker.x, walker.y, nx, ny)) {
         walker.x = wrapPos(nx)
         walker.y = wrapPos(ny)
       }
     }
     walker.z = walkFloor(walker.x, walker.y)
+  }
+
+  /** (x, y) in the museum's own across and forward (the doors are at +f) */
+  function museumLocal(x, y) {
+    const c = Math.round(Math.cos(museum.yaw))
+    const s = Math.round(Math.sin(museum.yaw))
+    const dx = wrapDelta(x, museum.x)
+    const dy = wrapDelta(y, museum.y)
+    return [dx * c + dy * s, dx * s - dy * c]
+  }
+  /** a step to (x, y) goes up the steps and in at the middle doors */
+  function atMuseumDoor(x, y) {
+    if (!museum) return false
+    const [a, f] = museumLocal(x, y)
+    return Math.abs(a) <= 4.6 && f > MU_CF && f < 9.6
+  }
+  function enterMuseum() {
+    indoors = true
+    room.enter()
+    footLog.info('into the museum')
+  }
+  /** out through the door: on the forecourt before the steps, facing away from them */
+  function leaveMuseum() {
+    indoors = false
+    if (!museum) return
+    const c = Math.round(Math.cos(museum.yaw))
+    const s = Math.round(Math.sin(museum.yaw))
+    const f = 11.5
+    walker.x = wrapPos(museum.x + f * s)
+    walker.y = wrapPos(museum.y - f * c)
+    walker.yaw = museum.yaw
+    walker.z = walkFloor(walker.x, walker.y)
+    footLog.info('out of the museum')
   }
 
   // How far the water runs from (x, y) along a heading, checking the bow line and, close in, the beam.
@@ -6244,6 +6664,7 @@ export function createScene(initial) {
   function drawMonuments() {
     if (chapel) drawMonument(chapel, MONUMENTS.chapel)
     if (temple) drawMonument(temple, MONUMENTS.temple)
+    if (museum) drawMonument(museum, MONUMENTS.museum)
   }
   function drawMonument(mo, M) {
     const x = mo.x - N * Math.round((mo.x - cam.x) / N)
@@ -6834,6 +7255,11 @@ export function createScene(initial) {
 
   function render() {
     if (W === 0) return bytes
+    if (onFoot && indoors) {
+      flameOut.count = 0
+      room.render(fb, W, H, lampK)
+      return bytes
+    }
     updateView()
     frameH = H
     flameOut.count = 0
@@ -6968,13 +7394,15 @@ export function createScene(initial) {
     /** the view the camera is in, or heading for */
     get view() { return viewTarget === 2 ? 'cockpit' : viewTarget === 1 ? 'chase' : 'top' },
     get onFoot() { return onFoot },
+    /** walking the gallery inside the museum */
+    get indoors() { return onFoot && indoors },
     get aboard() { return aboard >= 0 },
     get footView() { return footView === 1 ? 'first' : 'above' },
     /** the boat you are in is under way */
     get sailing() { return aboard >= 0 && sailing },
     /** whether E would do something now: on foot, a boat within reach; aboard, a shore within reach */
     get canBoard() {
-      if (!onFoot) return false
+      if (!onFoot || indoors) return false
       if (aboard >= 0) {
         const b = boats[aboard]
         return !!b && !!nearestStand(b.x, b.y, 28)
