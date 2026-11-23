@@ -46,6 +46,15 @@ precision highp sampler2D;
 #define NCMASK ${K.NC - 1}
 #define NC ${K.NC}
 #define FLOOR_H ${K.FLOOR_H}.0
+#define M_HSTONE ${K.M_HSTONE}
+#define M_SLAT ${K.M_SLAT}
+#define M_IRON ${K.M_IRON}
+#define M_DOOR ${K.M_DOOR}
+#define FAC_L1 ${Number(K.FAC_L1).toFixed(3)}
+#define F_ROOF ${K.F_ROOF}
+#define FAC_WALK ${K.FAC_WALK}
+#define FAC_L2 ${Number(K.FAC_L2).toFixed(3)}
+#define FAC_L3 ${Number(K.FAC_L3).toFixed(3)}
 #define NSHIFT ${Math.round(Math.log2(K.N))}
 #define JET_W ${K.JET_W}
 #define JET_L ${K.JET_L}
@@ -114,6 +123,56 @@ uint hash8(uint o) {
   h ^= h >> 15;
   h *= 0x2c1b3c6du;
   return (h >> 24) & 255u;
+}
+
+// facadeAt in scene.ts, the same rules: what a house wall shows at a point of its face, as a role
+// 0 wall · 1 wall in shadow · 2 stone · 3 stone in shadow · 4 shutter · 5 slat · 6 lit window · 7 iron · 8 door
+// · 9 far off, the wall and the shutters together
+int facadeAt(int fk, float dTop, float a, float mp, uint cell, uint on, int floors) {
+  int kind = fk & 7;
+  float da = abs(a - 0.5);
+  int fl = max(0, int(floor(dTop / FLOOR_H)));
+  float r = dTop - float(fl) * FLOOR_H;
+  bool ground = fl >= floors - 1;
+  bool rust = ground && (fk >= 8 || floors >= 3);
+  bool stone = kind == 3 || rust;
+  int dk = stone ? 3 : 1;
+  bool windowed = kind == 2 || (kind == 4 && !ground);
+  bool lit = windowed && on != 0u && hash8(cell * 4u + uint(fl)) < on;
+  if (mp < FAC_L1) {
+    if (stone || fl >= floors) return 2;
+    if (r >= 1.4 && r < 3.95) return lit ? 6 : 9;
+    return 0;
+  }
+  bool l2 = mp >= FAC_L2;
+  bool l3 = mp >= FAC_L3;
+  if (dTop < 0.45) return l2 && dTop > 0.3 && fract(a * 5.0) < 0.5 ? 3 : 2;
+  if (l2 && dTop < 0.6) return dk;
+  if (fl >= floors) return 2;
+  bool door = kind == 4 && ground;
+  if (door) {
+    float top = 1.3 + 0.6 * (1.0 - sqrt(max(0.0, 1.0 - (da / 0.38) * (da / 0.38))));
+    if (da < 0.38 && r >= top) return l3 && da < 0.02 ? 7 : 8;
+    if (l2 && da < 0.45 && r >= top - 0.2) return rust ? 3 : 2;
+  }
+  if (r > FLOOR_H - 0.28) return rust && l2 ? 3 : 2;
+  int courses = l3 && fract(r / 0.55) < 0.1 ? 3 : 2;
+  if (kind == 3) return ground ? courses : (l2 && fract(dTop / 0.8) < 0.08 ? 3 : 2);
+  if (windowed) {
+    if (kind == 4 && fl == floors - 2) {
+      if (r >= 3.2 && r < 3.95 && da < 0.47) {
+        if (!l3 || r < 3.3 || fract(a * 9.0) < 0.4) return 7;
+      } else if (r >= 3.95 && r < 4.15 && da < 0.5) return 2;
+      else if (l2 && r >= 4.15 && r < 4.4 && da < 0.45) return dk;
+    }
+    if (da < 0.4 && r >= 1.4 && r < 3.95) {
+      if (lit) return l3 && da < 0.02 ? 5 : 6;
+      return l3 && (da < 0.02 || fract(r * 5.0) < 0.3) ? 5 : 4;
+    }
+    if (l2 && da < 0.47 && r >= 1.25 && r < 4.1) return rust ? 3 : 2;
+    if (l2 && da < 0.5 && r >= 0.95 && r < 1.25) return rust ? 3 : 2;
+  }
+  return rust ? courses : 0;
 }
 
 // the depth at which the line t0 + t1·v leaves [lo, hi] (r1 is 1 / t1, or 0 when t1 is 0)
@@ -436,17 +495,94 @@ void main() {
           }
         }
         uint col = wall ? sideC : topC;
-        if (wall && (pal(4, m) & 2u) != 0u) {
-          // a villa's windows: a band of green shutters on each floor, below the cornice. At night
-          // some are lit, each window (this cell, this floor) at its own moment: pal(5, 23) of 256
-          float mp = uScale / (1.0 + uQ * vPrev);
-          float Rp = uCy - mp * (uTn * vPrev - uA) + EPS;
-          float kf = h - (Rp - float(y)) / mp - 0.8;
-          if (kf > 0.0 && mod(kf, FLOOR_H) < 1.5) {
-            col = shade ? pal(5, 21) : pal(5, 20);
-            uint on = pal(5, 23);
-            uint cell = (uint(gy & NMASK) << NSHIFT) | uint(gx & NMASK);
-            if (on != 0u && hash8(cell * 4u + uint(int(kf / FLOOR_H))) < on) col = pal(5, 22);
+        int fk = int((pal(4, m) >> 2) & 15u);
+        if (wall && fk != 0) {
+          // a house: its facade painted on (facadeAt). First where the ray came into the house: walk back
+          // from this cell towards where the ray was at the step before, cell by cell, to the last one that
+          // is part of the house; when that is a wall, the ray met it on the face it crossed to come in,
+          // and that is what shows, up to the eaves (see scene.ts)
+          float txp = tx0 + tx1 * vPrev;
+          float typ = ty0 + ty1 * vPrev;
+          int ix = int(flx);
+          int iy = int(fly);
+          float dx = txp - tx;
+          float dy = typ - ty;
+          float sX = dx > 0.0 ? (flx + 1.0 - tx) / dx : dx < 0.0 ? (flx - tx) / dx : 2.0;
+          float sY = dy > 0.0 ? (fly + 1.0 - ty) / dy : dy < 0.0 ? (fly - ty) / dy : 2.0;
+          float dsX = dx != 0.0 ? abs(1.0 / dx) : 2.0;
+          float dsY = dy != 0.0 ? abs(1.0 / dy) : 2.0;
+          bool facade = false;
+          bool xEdge = true;
+          float t = 0.0;
+          int kind = fk;
+          int fm = m;
+          int cx = gx;
+          int cy = gy;
+          float hW = h;
+          float hF = -1.0;
+          int ek = fk;
+          int em = m;
+          int ex = gx;
+          int ey = gy;
+          for (int n = 0; n < FAC_WALK; n++) {
+            bool isX = sX < sY;
+            float sc = isX ? sX : sY;
+            if (sc > 1.0) break;
+            if (isX) { ix += dx > 0.0 ? 1 : -1; sX += dsX; } else { iy += dy > 0.0 ? 1 : -1; sY += dsY; }
+            ivec2 c2 = ivec2((uB.x + ix) & NMASK, (uB.y + iy) & NMASK);
+            int m2 = int(texelFetch(uMat, c2, 0).r);
+            int k2 = int((pal(4, m2) >> 2) & 15u);
+            if (k2 == 0) {
+              if ((ek & 7) != F_ROOF) {
+                facade = true;
+                xEdge = isX;
+                t = 1.0 - sc;
+                kind = ek;
+                fm = em;
+                cx = ex;
+                cy = ey;
+                hW = float(texelFetch(uHeight, ivec2(ex & NMASK, ey & NMASK), 0).r);
+                hF = float(texelFetch(uHeight, c2, 0).r);
+              }
+              break;
+            }
+            ek = k2;
+            em = m2;
+            ex = uB.x + ix;
+            ey = uB.y + iy;
+          }
+          if (!facade && (fk & 7) != F_ROOF) facade = true;
+          if (facade) {
+            float a = xEdge ? fract(typ + (ty - typ) * t) : fract(txp + (tx - txp) * t);
+            if (hF < 0.0) {
+              int sx = tx > txp ? -1 : 1;
+              int sy = ty > typ ? -1 : 1;
+              hF = min(float(texelFetch(uHeight, ivec2((cx + sx) & NMASK, cy & NMASK), 0).r), float(texelFetch(uHeight, ivec2(cx & NMASK, (cy + sy) & NMASK), 0).r));
+            }
+            int floors = max(1, int(floor((hW - hF) / FLOOR_H + 0.5)));
+            // the heights on it are measured where the ray meets the face (see scene.ts)
+            float vc = vPrev + (v - vPrev) * t;
+            float mc = uScale / (1.0 + uQ * vc);
+            float rc = uCy - mc * (uTn * vc - uA) + EPS;
+            float z = (rc - float(y)) / mc;
+            // over the wall, when this is the roof behind it: the roof's own side
+            if ((fk & 7) != F_ROOF || z < hW) {
+              uint cell = (uint(cy & NMASK) << NSHIFT) | uint(cx & NMASK);
+              int role = facadeAt(kind, hW - z, a, mc, cell, pal(5, 23), floors);
+              int lit = shade ? 3 : 2;
+              uint wallC = pal(lit, fm);
+              uint shutC = shade ? pal(5, 21) : pal(5, 20);
+              if (role == 0) col = wallC;
+              else if (role == 1) col = pal(3, fm);
+              else if (role == 2) col = pal(lit, M_HSTONE);
+              else if (role == 3) col = pal(3, M_HSTONE);
+              else if (role == 4) col = shutC;
+              else if (role == 5) col = pal(lit, M_SLAT);
+              else if (role == 6) col = pal(5, 22);
+              else if (role == 7) col = pal(lit, M_IRON);
+              else if (role == 8) col = pal(lit, M_DOOR);
+              else if (role == 9) col = (((wallC & 0xfefefefeu) >> 1) + ((shutC & 0xfefefefeu) >> 1)) | 0xff000000u;
+            }
           }
         }
         oColor = colour(col, fogAt(v));
@@ -728,7 +864,7 @@ export function createGpuWorld() {
       palData[64 + i] = f.topShade[i] || 0
       palData[128 + i] = f.sideLit[i] || 0
       palData[192 + i] = f.sideShade[i] || 0
-      palData[256 + i] = (G.bloom[i] ? 1 : 0) | (G.windowMat[i] ? 2 : 0)
+      palData[256 + i] = (G.bloom[i] ? 1 : 0) | (G.facade[i] << 2)
     }
     for (let i = 0; i < 8; i++) {
       palData[320 + i] = f.cloudTop[i] || 0

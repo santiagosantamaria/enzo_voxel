@@ -278,6 +278,8 @@ function normalise(field) {
 //        35 balustrade · 36 topiary · 37–39 fir: top, body, edge · 40–42 round-crowned tree: top, body, edge
 //        villa gardens: 43 box hedge · 44 stone (fountain rim) · 45 fountain water · 46 plinth and spout
 //        47–49 flowers: pink, yellow, white · 50 clipped lawn · 51–52 paving, light and dark
+//        houses: 53 white stone wall (the corner pilasters) · 54–55 the stone portal bay of a house of two
+//        and three floors · 56–58 only colours on a facade: shutter slats, iron, the door
 const MAT_TOP = [
   [36, 104, 180], [44, 124, 198], [66, 160, 216], [104, 204, 214],
   [238, 220, 164], [222, 200, 140],
@@ -297,6 +299,8 @@ const MAT_TOP = [
   [52, 118, 58], [178, 174, 166], [118, 186, 214], [206, 204, 198],
   [236, 76, 146], [248, 212, 58], [246, 244, 238], [118, 186, 74],
   [206, 198, 182], [188, 180, 164],
+  [178, 86, 58], [178, 86, 58], [178, 86, 58], [36, 70, 50], [46, 46, 52], [100, 62, 40],
+  [178, 86, 58], [178, 86, 58],
 ]
 const MAT_SIDE = [
   [36, 104, 180], [44, 124, 198], [66, 160, 216], [104, 204, 214],
@@ -317,16 +321,114 @@ const MAT_SIDE = [
   [34, 84, 44], [138, 134, 128], [88, 146, 170], [160, 158, 152],
   [70, 128, 56], [70, 128, 56], [70, 128, 56], [78, 140, 52],
   [150, 142, 130], [150, 142, 130],
+  [236, 230, 214], [228, 186, 108], [238, 224, 190], [36, 70, 50], [46, 46, 52], [100, 62, 40],
+  [224, 158, 120], [236, 210, 132],
 ]
 const NMAT = MAT_TOP.length
 const WALLS = [17, 18, 19, 27] // stucco colours; the windowed wall of each is WINDOWED[i]
 const WINDOWED = [28, 29, 30, 31]
+const M_HSTONE = 53 // a house's white stone: corner pilasters, trim
+const M_PORTAL = [54, 55, 59, 60] // the bay with the door, in each wall colour (as WALLS)
+const M_SLAT = 56
+const M_IRON = 57
+const M_DOOR = 58
 /** walls and roofs: not walkable, a bomb knocks them down to the house's floor */
-const isBuilt = (m) => (m >= 17 && m <= 22) || (m >= 27 && m <= 33)
-/** a wall with shuttered windows: the drawn facade has a band of shutters on every floor */
-const WINDOW_MAT = new Uint8Array(64)
-for (const m of WINDOWED) WINDOW_MAT[m] = 1
-const FLOOR_H = 3
+const isBuilt = (m) => (m >= 17 && m <= 22) || (m >= 27 && m <= 33) || (m >= 53 && m <= 55) || m === 59 || m === 60
+const FLOOR_H = 5
+
+// ── facades
+// A house's walls are columns of the height map like everything else, so the detail is painted on each
+// face as it is drawn, after the palazzi of southern Italy: a white stone cornice with dentils under the
+// eaves and a stone band between the floors; on the windowed cells a window with green slatted shutters
+// in a stone frame with a little cornice over it; white stone pilasters at the corners; and in the middle
+// of one long side an arched door in a stone surround, an iron balcony on a stone slab over it. Some
+// houses (all of three floors, and the pink ones) stand on a ground floor of rusticated white stone.
+// FACADE says which a wall material is. facadeAt gives a role (F_…), which each renderer turns into a
+// colour; gpu-world.ts has the same function in GLSL, and the two must agree. The detail comes in by how
+// many pixels a unit is on the screen (mp), so far off a wall does not shimmer or break into stripes:
+// past FAC_L1 a floor shows only a band where its windows are, and the stone.
+const FACADE = new Uint8Array(64) // kind: 1 plain stucco, 2 stucco with a window, 3 stone pilaster, 4 the door's bay; + 8 rusticated
+for (let i = 0; i < 4; i++) {
+  const rust = i === 2 ? 8 : 0
+  FACADE[WALLS[i]] = 1 | rust
+  FACADE[WINDOWED[i]] = 2 | rust
+  FACADE[M_PORTAL[i]] = 4 | rust
+}
+FACADE[M_HSTONE] = 3
+// a house's roof (kind 5): its sides show only over the walls; under the eaves, the wall in front of it
+const F_ROOF = 5
+for (const m of [20, 21, 22]) FACADE[m] = F_ROOF
+const FAC_WALK = 12 // how many cells the renderers walk back along a ray to find where it came into a house
+const F_WALL = 0
+const F_WALL_DK = 1
+const F_STONE = 2
+const F_STONE_DK = 3
+const F_SHUTTER = 4
+const F_SLAT = 5
+const F_LIT = 6
+const F_IRON = 7
+const F_DOOR = 8
+const F_BAND = 9 // far off: the wall and the shutters together
+const FAC_L1 = 2.5 // pixels a unit: from here the cornice, the bands and the windows' shape …
+const FAC_L2 = 7 // … the frames, the little cornices, the door's arch, the joints …
+const FAC_L3 = 14 // … the slats, the balcony's bars
+/**
+ * what a house wall shows at a point of its face: fk its FACADE value, dTop how far below the eave, a
+ * across the cell (0 to 1), mp pixels a unit, cell the cell's index and on how many windows of 256 are lit
+ * (both for the lit ones), floors how many floors the house has (from the ground in front of the wall)
+ */
+function facadeAt(fk, dTop, a, mp, cell, on, floors) {
+  const kind = fk & 7
+  const da = Math.abs(a - 0.5)
+  const fl = Math.max(0, Math.floor(dTop / FLOOR_H))
+  const r = dTop - fl * FLOOR_H
+  const ground = fl >= floors - 1 // the ground floor (or the footing under it, where the ground falls away)
+  const rust = ground && (fk >= 8 || floors >= 3) // a ground floor of rusticated stone
+  const stone = kind === 3 || rust
+  const dk = stone ? F_STONE_DK : F_WALL_DK
+  const windowed = kind === 2 || (kind === 4 && !ground)
+  const lit = windowed && on > 0 && hash8(cell * 4 + fl) < on
+  if (mp < FAC_L1) {
+    if (stone || fl >= floors) return F_STONE
+    if (r >= 1.4 && r < 3.95) return lit ? F_LIT : F_BAND
+    return F_WALL
+  }
+  const l2 = mp >= FAC_L2
+  const l3 = mp >= FAC_L3
+  // the cornice under the eaves, with dentils, and its shadow on the wall
+  if (dTop < 0.45) return l2 && dTop > 0.3 && (a * 5) % 1 < 0.5 ? F_STONE_DK : F_STONE
+  if (l2 && dTop < 0.6) return dk
+  if (fl >= floors) return F_STONE
+  // the door, arched, in a stone surround
+  const door = kind === 4 && ground
+  if (door) {
+    const top = 1.3 + 0.6 * (1 - Math.sqrt(Math.max(0, 1 - (da / 0.38) ** 2)))
+    if (da < 0.38 && r >= top) return l3 && da < 0.02 ? F_IRON : F_DOOR
+    if (l2 && da < 0.45 && r >= top - 0.2) return rust ? F_STONE_DK : F_STONE
+  }
+  // a stone band at the foot of each floor: on the ground floor the plinth, darker under rusticated stone
+  if (r > FLOOR_H - 0.28) return rust && l2 ? F_STONE_DK : F_STONE
+  // rusticated stone, in courses (and so the foot of each pilaster); the pilaster above, with joints
+  const courses = l3 && (r / 0.55) % 1 < 0.1 ? F_STONE_DK : F_STONE
+  if (kind === 3) return ground ? courses : l2 && (dTop / 0.8) % 1 < 0.08 ? F_STONE_DK : F_STONE
+  if (windowed) {
+    // a balcony over the door: the railing in front of the window, the slab, its shadow
+    if (kind === 4 && fl === floors - 2) {
+      if (r >= 3.2 && r < 3.95 && da < 0.47) {
+        if (!l3 || r < 3.3 || (a * 9) % 1 < 0.4) return F_IRON
+      } else if (r >= 3.95 && r < 4.15 && da < 0.5) return F_STONE
+      else if (l2 && r >= 4.15 && r < 4.4 && da < 0.45) return dk
+    }
+    // the window, most of the cell wide: shutters (or lit, at night), its frame, a little cornice over it
+    if (da < 0.4 && r >= 1.4 && r < 3.95) {
+      if (lit) return l3 && da < 0.02 ? F_SLAT : F_LIT
+      return l3 && (da < 0.02 || (r * 5) % 1 < 0.3) ? F_SLAT : F_SHUTTER
+    }
+    if (l2 && da < 0.47 && r >= 1.25 && r < 4.1) return rust ? F_STONE_DK : F_STONE
+    if (l2 && da < 0.5 && r >= 0.95 && r < 1.25) return rust ? F_STONE_DK : F_STONE
+  }
+  return rust ? courses : F_WALL
+}
 /** trees, three kinds: [middle, body, edge] materials. The middle cell is the trunk under the leaves. */
 const TREE_KINDS = [[9, 10, 11], [37, 38, 39], [40, 41, 42]] // leafy, fir, round crown
 const TREE = new Uint8Array(64) // 1 leaves, 2 trunk
@@ -1415,6 +1517,7 @@ export function createScene(initial) {
   let shutterShade = 0
   let winLit = 0 // a villa window lit from inside, at night
   let winOn = 0 // how many windows in 256 are lit now: those whose hash8 is under this
+  const facPal = new Uint32Array(10) // a facade's colours for this column, by role (F_…)
   const topLit = new Uint32Array(NMAT)
   const topShade = new Uint32Array(NMAT)
   const sideLit = new Uint32Array(NMAT)
@@ -1619,8 +1722,8 @@ export function createScene(initial) {
   // holds row ranges (y0, y1 pairs) of the height and material maps changed since, by bombs.
   const GW = {
     heightMap, matMap, cloudN, nz, stamp: 0, dirty: [],
-    bloom: BLOOM, windowMat: WINDOW_MAT, // per material: a flower drawn as a bloom; a wall with shutters
-    consts: { N, NC, CLOUD_ALT, CK, ZTOP, FLOOR_H, JET_W, JET_L, PIV_K, EPS, FOG_STEPS },
+    bloom: BLOOM, facade: FACADE, // per material: a flower drawn as a bloom; a house wall's facade
+    consts: { N, NC, CLOUD_ALT, CK, ZTOP, FLOOR_H, JET_W, JET_L, PIV_K, EPS, FOG_STEPS, M_HSTONE, M_SLAT, M_IRON, M_DOOR, FAC_L1, FAC_L2, FAC_L3, F_ROOF, FAC_WALK },
   }
   let spawnX = N / 2
   let spawnY = N / 2
@@ -1839,15 +1942,17 @@ export function createScene(initial) {
     }
   }
 
-  // A house on the lake, after the villas of Lake Como: stucco walls in one of four warm colours, a column
-  // of green-shuttered windows every other cell (the shutters are drawn floor by floor on the facade), a
-  // shallow terracotta hip roof that slopes down on all four sides, lighter on the sunny slopes, and a
-  // gravel yard. A villa is bigger and often three floors, may have a white bell tower with a pointed cap
-  // at one corner, and stands in a garden of cypresses and clipped topiary behind a stone balustrade.
+  // A house on the lake, after the villas of Lake Como and the palazzi further south: stucco walls in one
+  // of four warm colours, a column of windows every other cell, white stone pilasters at the corners, a
+  // stone bay with the door in the middle of one long side (the facade is painted on as it is drawn: see
+  // facadeAt), a shallow terracotta hip roof that slopes down on all four sides, lighter on the sunny
+  // slopes, and a gravel yard. A villa is bigger and often three floors, may have a white bell tower with a
+  // pointed cap at one corner, and stands in a garden of cypresses and clipped topiary behind a stone
+  // balustrade.
   function stampHouse(cx, cy, rot, rnd) {
     const villa = rnd() < 0.4
-    const w0 = villa ? 11 + ((rnd() * 3) | 0) : 7 + ((rnd() * 3) | 0)
-    const d0 = villa ? 12 + ((rnd() * 4) | 0) : 8 + ((rnd() * 3) | 0)
+    const w0 = villa ? 14 + ((rnd() * 3) | 0) : 9 + ((rnd() * 3) | 0)
+    const d0 = villa ? 15 + ((rnd() * 5) | 0) : 10 + ((rnd() * 4) | 0)
     const ww = rot ? d0 : w0
     const dd = rot ? w0 : d0
     const yard = villa ? 3 : 2
@@ -1902,7 +2007,11 @@ export function createScene(initial) {
         }
       }
     }
-    // the house: walls round the edge, the hip roof inside
+    // the house: walls round the edge (stone at the corners, the portal in the middle of one long side,
+    // windows every other cell counted from the middle of each side, so the portal stands where a window
+    // would and has plain wall either side, and never in the cell beside a corner), the hip roof inside
+    const front = (id & 1) === 0 ? 0 : 1 // which long side has the door
+    const portal = M_PORTAL[tint]
     for (let dy = 0; dy < dd; dy++) {
       for (let dx = 0; dx < ww; dx++) {
         const o = ((((cy + dy) & NM) << NSHIFT) | ((cx + dx) & NM))
@@ -1913,9 +2022,14 @@ export function createScene(initial) {
         const near = Math.min(dW, dE, dN, dS)
         if (near === 0) {
           const corner = (dW === 0 || dE === 0) && (dN === 0 || dS === 0)
-          const along = dN === 0 || dS === 0 ? dx : dy
+          const ns = dN === 0 || dS === 0
+          const along = ns ? dx : dy
+          const len = ns ? ww : dd
+          const onFront = ww >= dd ? (front ? dS === 0 : dN === 0) : (front ? dE === 0 : dW === 0)
           heightMap[o] = top
-          matMap[o] = !corner && (along & 1) === 1 && along < (dN === 0 || dS === 0 ? ww : dd) - 1 ? win : wall
+          if (corner) matMap[o] = M_HSTONE
+          else if (onFront && along === len >> 1) matMap[o] = portal
+          else matMap[o] = ((along - (len >> 1)) & 1) === 0 && along >= 2 && along <= len - 3 ? win : wall
         } else {
           heightMap[o] = top + 1 + Math.floor((near - 1) * 0.55)
           const ties = (dW === near ? 1 : 0) + (dE === near ? 1 : 0) + (dN === near ? 1 : 0) + (dS === near ? 1 : 0)
@@ -2691,7 +2805,7 @@ export function createScene(initial) {
     return !houseMap[o] && !parkMap[o] && ((m >= 6 && m <= 8) || isTree(m) || BLOOM[m] === 1)
   }
   const mid = (h) => [h.x + h.w / 2, h.y + h.d / 2]
-  const isVilla = (h) => h.w * h.d >= 120 // a townhouse is at most 9 by 10, a villa at least 11 by 12
+  const isVilla = (h) => h.w * h.d >= 180 // a townhouse is at most 11 by 13, a villa at least 14 by 15
   /** the way from (cx, cy) to the middle of a house, as the nearest of the four map directions */
   const facing = (cx, cy, hx, hy) => {
     const dx = wrapDelta(hx, cx + 0.5)
@@ -5422,6 +5536,13 @@ export function createScene(initial) {
       const ay = -s * inv
       let wx = bx - Cx * ax - v * s
       let wy = by - Cx * ay - v * c
+      // where each pixel's ray was at the step before, to find which face of a wall it came in by
+      const vP = stepV[k - 1]
+      const invP = (1 + q * vP) / S
+      const axP = c * invP
+      const ayP = -s * invP
+      const wxP0 = bx - Cx * axP - vP * s
+      const wyP0 = by - Cx * ayP - vP * c
       // distance haze: colours step towards the horizon colour, a few shades at a time
       let fog = 0
       if (q > 0 && v > fogStart) {
@@ -5549,26 +5670,116 @@ export function createScene(initial) {
         // the wall of this column, where it starts …
         if (yR < cY) {
           if (yR < rowLo) yR = rowLo
-          if (WINDOW_MAT[mat] === 1) {
-            // a villa's windows: a band of green shutters on each floor, below the cornice. At night
-            // some are lit from inside, each window (this cell, this floor) at its own moment.
-            let sh = shade ? shutterShade : shutterLit
-            let lit = winLit
-            if (fog > 0) {
-              sh = mixHaze(sh, keep, fog)
-              lit = mixHaze(lit, keep, fog)
+          const fk = FACADE[mat]
+          // a house: its facade painted on (facadeAt). First where the ray came into the house: walk back
+          // from this cell towards where the ray was at the step before, cell by cell, to the last one that
+          // is part of the house. When that is a wall, the ray met it on the face it crossed to come in,
+          // and that is what shows, up to the eaves. Mostly it is this cell, but it can be the one before
+          // it along the wall, when the ray ran along the wall between two steps (up close at a joint, or
+          // far off, where a step is several cells), or the wall under the roof the step landed on (far
+          // off): without this, joints show slivers of side faces and, far off, the roof runs down to the
+          // ground in stripes.
+          let facade = false
+          let xEdge = true
+          let t = 0
+          let kind = fk
+          let cell = idx
+          let fm = mat
+          let hW = h
+          let hF = -1
+          let wxp = 0
+          let wyp = 0
+          if (fk !== 0) {
+            wxp = wxP0 + axP * px
+            wyp = wyP0 + ayP * px
+            let ix = Math.floor(wx)
+            let iy = Math.floor(wy)
+            const dx = wxp - wx
+            const dy = wyp - wy
+            let sX = dx > 0 ? (ix + 1 - wx) / dx : dx < 0 ? (ix - wx) / dx : 2
+            let sY = dy > 0 ? (iy + 1 - wy) / dy : dy < 0 ? (iy - wy) / dy : 2
+            const dsX = dx !== 0 ? Math.abs(1 / dx) : 2
+            const dsY = dy !== 0 ? Math.abs(1 / dy) : 2
+            let ek = fk
+            let ei = idx
+            for (let n = 0; n < FAC_WALK; n++) {
+              const isX = sX < sY
+              const sc = isX ? sX : sY
+              if (sc > 1) break
+              if (isX) { ix += dx > 0 ? 1 : -1; sX += dsX } else { iy += dy > 0 ? 1 : -1; sY += dsY }
+              const i2 = ((iy & NM) << NSHIFT) | (ix & NM)
+              const k2 = FACADE[_m[i2]]
+              if (k2 === 0) {
+                // out of the house: the ray came in through ei, across this line
+                if ((ek & 7) !== F_ROOF) {
+                  facade = true
+                  xEdge = isX
+                  t = 1 - sc
+                  kind = ek
+                  cell = ei
+                  fm = _m[ei]
+                  hW = _h[ei]
+                  hF = _h[i2]
+                }
+                break
+              }
+              ek = k2
+              ei = i2
             }
+            // a wall with no way in found (the ray came down onto it within one cell): as it is
+            if (!facade && (fk & 7) !== F_ROOF) facade = true
+          }
+          if (facade) {
+            let a
+            if (xEdge) {
+              const yy = wyp + (wy - wyp) * t
+              a = yy - Math.floor(yy)
+            } else {
+              const xx = wxp + (wx - wxp) * t
+              a = xx - Math.floor(xx)
+            }
+            const cx = cell & NM
+            const cy = cell >> NSHIFT
+            if (hF < 0) {
+              // the ground in front: the lower of the cells beside this one towards the camera
+              const sx = wx > wxp ? -1 : 1
+              const sy = wy > wyp ? -1 : 1
+              hF = Math.min(_h[(cy << NSHIFT) | ((cx + sx) & NM)], _h[(((cy + sy) & NM) << NSHIFT) | cx])
+            }
+            // how many floors the house has: its height over the ground in front
+            const floors = Math.max(1, Math.round((hW - hF) / FLOOR_H))
+            // the heights on it are measured where the ray meets the face, not at the step before, so the
+            // bands and windows line up from one column of pixels to the next
+            const vc = vP + (v - vP) * t
+            const mc = S / (1 + q * vc)
+            const rc = Cy - mc * (tn * vc - A) + EPS
+            const fp = facPal
+            const wallC = shade ? sideShade[fm] : sideLit[fm]
+            const shutC = shade ? shutterShade : shutterLit
+            fp[F_WALL] = wallC
+            fp[F_WALL_DK] = sideShade[fm]
+            fp[F_STONE] = shade ? sideShade[M_HSTONE] : sideLit[M_HSTONE]
+            fp[F_STONE_DK] = sideShade[M_HSTONE]
+            fp[F_SHUTTER] = shutC
+            fp[F_SLAT] = shade ? sideShade[M_SLAT] : sideLit[M_SLAT]
+            fp[F_LIT] = winLit
+            fp[F_IRON] = shade ? sideShade[M_IRON] : sideLit[M_IRON]
+            fp[F_DOOR] = shade ? sideShade[M_DOOR] : sideLit[M_DOOR]
+            // half and half, byte by byte (as the shader does)
+            fp[F_BAND] = ((((wallC & 0xfefefefe) >>> 1) + ((shutC & 0xfefefefe) >>> 1)) | 0xff000000) >>> 0
+            if (fog > 0) for (let i = 0; i < 10; i++) fp[i] = mixHaze(fp[i], keep, fog)
             const on = winOn
+            // over the wall, when this is the roof behind it: the roof's own side
+            const eave = (fk & 7) === F_ROOF ? hW : 1e9
             for (let y = yR, o = yR * W + px; y < cY; y++, o += W) {
               if (_fb[o] !== 0) continue
-              const k = h - (Rp - y) / mp - 0.8
-              if (k > 0 && k % FLOOR_H < 1.5) _fb[o] = on > 0 && hash8(idx * 4 + ((k / FLOOR_H) | 0)) < on ? lit : sh
-              else _fb[o] = side
+              const z = (rc - y) / mc
+              _fb[o] = z >= eave ? side : fp[facadeAt(kind, hW - z, a, mc, cell, on, floors)]
               _zb[o] = v
             }
           } else {
-          for (let y = yR, o = yR * W + px; y < cY; y++, o += W) {
-            if (_fb[o] === 0) { _fb[o] = side; _zb[o] = v }
+            for (let y = yR, o = yR * W + px; y < cY; y++, o += W) {
+              if (_fb[o] === 0) { _fb[o] = side; _zb[o] = v }
             }
           }
           cY = yR

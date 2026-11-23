@@ -71,7 +71,7 @@ On the development laptop (Intel UHD, 640 × 360), the ground takes about the sa
 In development the page exposes the scene as `window.enzoScene`:
 
 - `enzoScene.groundStats`: where the ground is drawn, its average ms, the step count, and the GPU's own times (`setup`, `shade`, `read`).
-- `enzoScene.compareGround()`: the next frame is drawn both ways. `enzoScene.groundDiff` then counts the pixels whose colour or depth differ. Expect 0 to 3 (float rounding).
+- `enzoScene.compareGround()`: the next frame is drawn both ways. `enzoScene.groundDiff` then counts the pixels whose colour or depth differ. Expect 0 to 3 (float rounding); a facade seen head-on and close can show a few dozen more, where the edge of a band falls right on a row of pixels.
 
 Projection, used everywhere (`project` and the jet slices):
 
@@ -106,7 +106,6 @@ Click (pointer down and up in under 0.2s) barrel-rolls the plane. Holding the po
 | A, D | Turn | Step left, step right (sideways, no turn) | Turn, sailing or not. If Enzo is out on deck, he climbs back in first. |
 | Left, Right | Turn | Turn | Turn, as A and D |
 | Shift | Throttle and smoke | — | — |
-| B or F | Drop bombs while held | — | — |
 | V | Become the person | Back to the jet | Back to the jet. The boat stays as it is. |
 | E | — | Board the nearest boat within 48 | Step ashore if land is within 28 |
 | Space | Next flight view | Overhead ↔ first person | Isometric aerial ↔ first person |
@@ -116,11 +115,13 @@ Click (pointer down and up in under 0.2s) barrel-rolls the plane. Holding the po
 
 Pitch is inverted only for the jet, and only in `sendKeys`: Up subtracts from climb, Down adds. Walking uses the same keys with the natural sign (Up adds to move). Do not reuse the flight sign for the person.
 
-On a coarse pointer, or `touchControls="on"`, there are on-screen buttons. Ctrl is not a game key. B is the bomb key.
+Bombing is switched off: `BOMBS = false` in `EnzoScene.jsx` leaves out the B and F keys, the Bomb button and the hints. The scene still has all of it (`setBomb`, `dropBomb`, the blasts, the wrecked houses, see "Houses and bombs"); setting `BOMBS` true brings it back, with B or F dropping bombs while held.
+
+On a coarse pointer, or `touchControls="on"`, there are on-screen buttons. Ctrl is not a game key.
 
 - **The frame on a phone.** Once the screen is known to be touched (`fingerScreen`), `layout` makes the game pixel no bigger than gives the frame `PHONE_PIXELS` (150,000). That is a little more than a 1280 by 720 desktop at `pixelSize` 3, so a phone shows about as much of the world and costs about the same to draw. A fixed `pixelSize` of 3 would give a phone a frame of about 125 by 271. The pixel is a whole number of the screen's own pixels (`devicePixelRatio`), so the art stays crisp: on a 375 by 812 phone at 3× that is 4 screen pixels, a frame of 281 by 609. The buttons and the hint are sized in CSS pixels, so they stay big. The buttons are 80 by 64 and the hint is 12 px.
 
-- **Flying.** View, Boost and Bomb, and Walk (V). A tap (under 300 ms, moved under 12 pixels) rolls the plane. A drag flies it the way of the drag, on the same stick as on foot. Overhead, `scene.setAim(dx, dy)` passes the drag on the screen and the plane turns toward that heading in the world, as a boat does, until it points the way of the drag. From behind and from the seat the stick goes in with the keys (`setKeys`): sideways turns, up climbs and down dives, so the plane moves on the screen the way the finger drags. Let go and it flies straight on, as after the keys; it goes back to wandering by itself only once the mouse moves. A finger no longer steers by where it is on the screen, as the mouse does.
+- **Flying.** View, Boost, and Walk (V) (and Bomb, when `BOMBS` is on). A tap (under 300 ms, moved under 12 pixels) rolls the plane. A drag flies it the way of the drag, on the same stick as on foot. Overhead, `scene.setAim(dx, dy)` passes the drag on the screen and the plane turns toward that heading in the world, as a boat does, until it points the way of the drag. From behind and from the seat the stick goes in with the keys (`setKeys`): sideways turns, up climbs and down dives, so the plane moves on the screen the way the finger drags. Let go and it flies straight on, as after the keys; it goes back to wandering by itself only once the mouse moves. A finger no longer steers by where it is on the screen, as the mouse does.
 - **On foot.** Fly (V), View, and Board (E). Board shows only when it would do something, a boat within 48 (`scene.canBoard`, looked at five times a second). Aboard it reads Ashore, and shows when land is within 28. Bomb and Boost are hidden.
 - **The stick.** A finger dragged on the screen is a stick from where it went down, shown as a ring and a knob. On foot, sideways turns and up or down walks, at full speed `STICK_R` (46 CSS pixels) out, nothing inside `STICK_DEAD` (8). It is added to the keys in `sendKeys`, and the wrapper captures the pointer so a finger lifted over a button still ends it.
 - **Aboard.** A tap (under 300 ms, moved under 12 pixels) calls `scene.sailToggle()`: set sail, or stop. If Enzo is out on deck, he climbs back in first and then the boat sails, as with W. A drag points the boat: `scene.setAim(dx, dy)` passes the drag on the screen, and `stepFoot` turns the boat at the rate of A and D toward that heading in the world (the screen's up is heading `−vYaw`). In the isometric view the world stays still, so the boat turns until it points the way of the drag. In first person the view turns with the boat, so a finger held off to one side keeps it turning, like a tiller. A drag of under 12 pixels does nothing. A drag never sets sail or stops.
@@ -172,7 +173,7 @@ The game starts in the light of the browser's clock (`timeOfDay="clock"` in the 
 - **Sky.** The sun is drawn only around dusk, big and low (by `tw[1]`), and sinks under the horizon as the phase goes on. The moon and the stars come up with `moonK` (phase 0.62 to 0.92). A star is drawn in `starPal`, each sky band brightened towards white by `moonK`.
 - **The cockpit** takes 100–270 ms to paint, so it is never repainted for the light. It is painted in the daylight jet palette (`jetPalDay`), and `drawCockpit` tones its layers and live parts by `cockpitTint` as it lays them on. The tint is the jet's grade applied to mid grey, as r, g, b in 256ths.
 - **Lamps.** `lampK` goes from 0 to 1 over phase `LAMP_ON0` to `LAMP_ON1` (0.55 to 0.9). Each lamp has its own moment, from a hash (`lampOn(h)`), so they come on one by one.
-  - **Villa windows.** At night some shutter bands are lit (`winLit`, warm yellow). A window is one cell and one floor. It is lit when `hash8(cell * 4 + floor)` is under `winOn`, which goes up to `WIN_LIT` (150 of 256). `drawWorld` and the GPU shader use the same hash, so the two still agree.
+  - **House windows.** At night some windows are lit (`winLit`, warm yellow): the window's opening shows the light, and far off, a light in the band of its floor. A window is one cell and one floor. It is lit when `hash8(cell * 4 + floor)` is under `winOn`, which goes up to `WIN_LIT` (150 of 256). `drawWorld` and the GPU shader use the same hash, so the two still agree.
   - **Boats** (`drawBoatLamps`). Small yellow lanterns, all the same warm colour: one each side a little forward of the middle, one on the stern and one at the top of the foremast. Each is one voxel drawn by `lampVox` inside the boat's own `voxBegin` … `voxEnd`, so the hull and the sails hide it where they should. Only a lamp that shows gets its glow. The deckhouse windows and the open hatch (`YM_WINDOW`) glow warm with `lampK`.
   - **Gardens.** A lamp post (`P_LAMP`) stands by the end of every bench (`placeLamps`), in the villa gardens, on the terraces and along the promenades, and four in the chapel's garden. At night its lantern is lit (`LAMP_LIT`) and glows. A faint warm light falls on each statue, and each fountain is lit from under the water: a blue glow, and the spray turns pale.
   - **The chapel.** Its windows are `YM_WINDOW`, the boats' window material, so they glow warm with `lampK` the same way.
@@ -234,25 +235,40 @@ Height of drawn columns is capped by `HMAX` (40). The jet’s clearance looks at
 | 47–49 | Flowers: pink (no longer used), yellow, white. The side colour is green, for the stems. `drawWorld` draws yellow and white (`BLOOM`) as a small bloom: only the middle of the cell's top (radius 0.3) has the flower's colour, the rest is grass green. Blooms only show near the ground: on foot or aboard, or in the chase and cockpit views while the plane is under `BLOOM_ALT` (16) above the ground. In the overhead flight view, or flying higher, a flower cell is plain green. |
 | 50 | Clipped lawn. |
 | 51–52 | Paving, light and dark: lakeside terraces and promenades. |
+| 53 | A house's white stone (`M_HSTONE`): the corner pilasters, and the colour of all the facade's stone. |
+| 54, 55, 59, 60 | The bay with the door (`M_PORTAL`), one in each wall colour, in the order of `WALLS`. |
+| 56–58 | Colours only, never on the map: the shutters' slats (`M_SLAT`), iron (`M_IRON`), the door (`M_DOOR`). |
 
 Trees of every kind go through `isTree(m)` and `isTrunk(m)` (built from `TREE_KINDS`), not through index ranges. Houses avoid them, yards clear them, bombs scorch them, `standable` rejects trunks, `walkFloor` reads `floorMap` under them, and docks do not pave over trunks. A new tree kind needs an entry in `TREE_KINDS` and colours in both palettes.
 
 `isGreen(m)` is grass, trees, cypresses, topiary, hedges, flowers and lawn: what a bomb scorches.
 
-Water is anything `< 4`. The person and the boats treat `>= 4` as solid. `isBuilt(m)` is walls, roofs and towers (17–22, 27–33): not walkable, and a bomb knocks them down to the house's floor. `WALLS[i]` and `WINDOWED[i]` pair a wall colour with its windowed version.
+Water is anything `< 4`. The person and the boats treat `>= 4` as solid. `isBuilt(m)` is walls, roofs and towers (17–22, 27–33, 53–55, 59–60): not walkable, and a bomb knocks them down to the house's floor. `WALLS[i]`, `WINDOWED[i]` and `M_PORTAL[i]` are the plain wall, the wall with a window and the door's bay of one wall colour.
+
+The palette is 64 materials wide (the GPU's palette texture, and `FACADE`, `TREE`, `BLOOM`, `GREEN`): with 61 in use, three are left.
 
 ## Houses and bombs
 
 Villages prefer grass near water, with a cluster near the spawn coast so there is something to bomb at once. The look is a lake-shore Italian village: stucco walls in ochre, cream, salmon or pale yellow, terracotta hip roofs, green shutters, cypresses. `stampHouse` makes one of two kinds:
 
-- **Villa** (40%): 11–13 by 12–15, 2 or 3 floors, a 3-cell yard. The outer ring is a stone balustrade (35) with gaps for gates, then garden, then a gravel walk against the walls. About half get a 3 by 3 bell tower (32) at one corner, 5 above the eaves, with a cap (33). Most also get a formal garden on one side (see Gardens).
-- **Townhouse**: 7–9 by 8–10, 2 floors, a 2-cell yard of gravel and garden.
+- **Villa** (40%): 14–16 by 15–19, 2 or 3 floors, a 3-cell yard. The outer ring is a stone balustrade (35) with gaps for gates, then garden, then a gravel walk against the walls. About half get a 3 by 3 bell tower (32) at one corner, 5 above the eaves, with a cap (33). Most also get a formal garden on one side (see Gardens).
+- **Townhouse**: 9–11 by 10–13, 2 floors, a 2-cell yard of gravel and garden.
 
-Wall height is `floors * FLOOR_H` (3) above the floor. Edge cells are the wall colour, and every other non-corner edge cell uses the windowed version (28–31). The interior is a hip roof: height rises with the distance in from the edge, cells on a hip line (two sides tie) are 20, west and north faces 22 (sunny), east and south faces 21 (shaded). Gardens get 2–4 cypresses (34, 7–10 tall), 1–3 topiary domes (36), and flowers on about one cell in seven along the ring. Trees in the yard are cleared. `houseMap` stores the house id on footprint cells. `houses[]` keeps `{x, y, w, d, base, alive}`.
+`isVilla` (for the gardens) is a footprint of 180 cells or more.
 
-Shutters are not cells. `drawWorld` paints them while it fills a wall column of a windowed material: it recovers the height of each pixel row from the previous depth step's `R` and `m` (`Rp`, `mp`) and draws a band of `shutterLit` or `shutterShade` for 1.5 of every `FLOOR_H` (3) units of height, so each floor shows one row of windows in every view. At night some of them are lit (see "Day and night").
+Wall height is `floors * FLOOR_H` (5) above the floor. The edge cells are the walls: the four corners white stone (53), the middle cell of one long side the door's bay (`M_PORTAL`, the side by the house's id), and along each side a window (28–31) every other cell, counted from the middle so the door stands where a window would, with plain wall either side of it and never a window in the cell beside a corner. The rest is plain wall (17–19, 27). The interior is a hip roof: height rises with the distance in from the edge, cells on a hip line (two sides tie) are 20, west and north faces 22 (sunny), east and south faces 21 (shaded). Gardens get 2–4 cypresses (34, 7–10 tall), 1–3 topiary domes (36), and flowers on about one cell in seven along the ring. Trees in the yard are cleared. `houseMap` stores the house id on footprint cells. `houses[]` keeps `{x, y, w, d, base, alive}`.
 
-Bombs come from the jet only. B held calls `dropBomb` every 0.38s, up to 18 in the air. A bomb inherits some of the jet’s horizontal speed, starts a little under the jet, and falls (gravity 95, terminal about 220). It explodes at the ground.
+**Facades.** A wall is one column of the height map, so its detail is painted on the face as it is drawn, after the palazzi of southern Italy. `FACADE[m]` says what a material is: 1 plain stucco, 2 stucco with a window, 3 the stone pilaster, 4 the door's bay, 5 a roof (20–22), and + 8 for the pink walls. `facadeAt(fk, dTop, a, mp, cell, on, floors)` gives a role (`F_WALL` … `F_BAND`) for a point of a face, from how far it is below the eaves (`dTop`), across the cell (`a`, 0 to 1), and how many pixels a unit is on screen (`mp`). Each renderer turns the role into a colour: `drawWorld` from `facPal`, the shader (`gpu-world.ts`, a GLSL copy of `facadeAt`) from the palette. The two must give the same roles.
+
+- Every house: a white stone cornice with dentils under the eaves, a stone band at the foot of each floor (the plinth on the ground floor), and windows with green slatted shutters in a white stone frame with a little cornice over them. The corners are white pilasters with joints.
+- The door's bay is the house's own stucco: an arched door in a stone surround, and over it the only balcony, iron on a stone slab, on the floor above the ground.
+- Some houses stand on a ground floor of rusticated white stone, in courses, with a darker plinth and dark stone round its windows and the door: every house of three floors, and the pink ones (the + 8). The foot of each pilaster is rusticated on every house.
+- How many floors a house has is read from the ground in front of the wall: the wall's height over the cell the ray came from (`floors`).
+- The detail comes in with `mp`, so far off a wall neither shimmers nor breaks into stripes. Under `FAC_L1` (2.5) a floor shows only its stone and a band where the windows are (`F_BAND`, the wall and the shutters half and half); from `FAC_L1` the windows' shape, the cornice and the bands; from `FAC_L2` (7) the frames, the little cornices, the door's arch and the joints; from `FAC_L3` (14) the slats, the balcony's bars and the courses.
+
+Where the ray met the wall: both renderers walk back from the cell a step landed on, towards where the ray was at the step before, cell by cell (up to `FAC_WALK`, 12), to the last cell that is part of the house (`FACADE` not 0). When that is a wall, the ray came in through it, across the line it crossed, and that is the face drawn: its kind, its colour, `a` where the ray crossed, and the heights measured at that depth, so the bands line up from one column of pixels to the next. Mostly it is the cell the step landed on. But up close, at a joint, the ray can run from one wall cell into the next between two steps, and far off a step can jump over the wall onto the roof; without the walk the joints show slivers of side faces and, far off, the roof's sides run down to the ground in stripes. When the step landed on the roof, the facade shows up to the eaves and the roof's own side above them. At night some windows are lit (see "Day and night").
+
+Bombs come from the jet only, and are switched off for now (`BOMBS` in `EnzoScene.jsx`, see "Controls"). B held calls `dropBomb` every 0.38s, up to 18 in the air. A bomb inherits some of the jet’s horizontal speed, starts a little under the jet, and falls (gravity 95, terminal about 220). It explodes at the ground.
 
 - On land the radius is 12. On water it is 6.
 - Any house touched is wrecked once: footprint becomes rubble (23) and scorch (24), one cell tall above the old floor. The yard around it scorches.
@@ -497,7 +513,8 @@ The world line lists islands, specks, docks, boats, fish, whales, gardens, viewp
 - A moored boat must be skipped in `stepBoats`. Clearing `moored` on W is what casts off (`castOff`). S stops by clearing `sailing` only.
 - Enzo out on deck is drawn from the rig buffers after the rig has been rasterized, so `drawEnzoOut` must come after the rig's `rasterVox` in `drawYacht`. Anything new that resets or leaves the boat you are in should call `loungeReset`, or he can come back sitting on a different boat. A new yacht needs a `seat` clear of its shrouds and booms, on a part of the deck wide enough for the walk out (`yachtHalf` there minus 0.5).
 - World rebuild resets `aboard` inside `placeDocks` and reseats the walker if they were on foot. The reseat also skips specks.
-- New wall or roof materials have to be added to `isBuilt`, and windowed walls to `WINDOWED` (which feeds `WINDOW_MAT`). Otherwise the person walks on roofs, bombs leave walls standing, or shutters do not show.
+- New wall or roof materials have to be added to `isBuilt`, and a house's walls and roofs to `FACADE`. Otherwise the person walks on roofs, bombs leave walls standing, or the facade does not show.
+- `facadeAt` in `scene.ts` and in the shader, and the walk back to where a ray came into a house, must stay the same in both renderers. `enzoScene.compareGround()` counts the pixels where they differ.
 - Boats do not write `zbuf`, except your own in first person. Otherwise the jet is drawn after them and lands on top, even when behind a sail. The chapel and the temple always write it, and are drawn before anything else that stands, so they hide what is behind them.
 - A building drawn as voxels over ground cells needs its cells in `parkMap` 4 with a height in `monumentTop`. Without it, the plane flies through it, the person walks into it, and bombs crater the ground under it.
 - The boat first-person camera and the walking first-person camera are different lenses. The walking one is long (the eye 26 behind the camera point), so anything of your own boat near the eye would sit in the middle of the picture as a cut-open hull. Keep the boat on its wide lens.

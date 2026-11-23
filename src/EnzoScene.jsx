@@ -5,16 +5,20 @@ import { createGpuWorld } from './lib/gpu-world.ts'
 
 const KEYS = Object.keys(DEFAULT_PARAMS)
 
+// Bombing from the plane is switched off: no key, no button, no hint. The scene still has all of it
+// (setBomb, dropBomb, the blasts and the wrecked houses); setting this true brings it back.
+const BOMBS = false
+
 const HINTS = {
-  top: 'Move to steer · Click to roll · Hold for throttle and smoke · B to bomb · V to walk · Space for chase view',
-  chase: 'Point to turn, climb and dive · Click to roll · Hold for throttle and smoke · B to bomb · V to walk · Space for the cockpit',
-  cockpit: 'Point to turn, climb and dive · Click to roll · Hold for throttle and smoke · B to bomb · V to walk · Space for overhead',
+  top: 'Move to steer · Click to roll · Hold for throttle and smoke · V to walk · Space for chase view',
+  chase: 'Point to turn, climb and dive · Click to roll · Hold for throttle and smoke · V to walk · Space for the cockpit',
+  cockpit: 'Point to turn, climb and dive · Click to roll · Hold for throttle and smoke · V to walk · Space for overhead',
 }
 
 const TOUCH_HINTS = {
-  top: 'Drag the way to fly · Tap to roll · Hold Boost · Bomb the houses · View for chase view · Walk to go on foot',
-  chase: 'Drag to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for the cockpit · Walk to go on foot',
-  cockpit: 'Drag to turn, climb and dive · Tap to roll · Hold Boost · Bomb · View for overhead · Walk to go on foot',
+  top: 'Drag the way to fly · Tap to roll · Hold Boost · View for chase view · Walk to go on foot',
+  chase: 'Drag to turn, climb and dive · Tap to roll · Hold Boost · View for the cockpit · Walk to go on foot',
+  cockpit: 'Drag to turn, climb and dive · Tap to roll · Hold Boost · View for overhead · Walk to go on foot',
 }
 
 // On a phone the frame has about this many pixels, a little more than a 1280 by 720 desktop's, so it shows
@@ -43,9 +47,7 @@ const FLY = {
   ArrowDown: 'down', KeyS: 'down',
   ShiftLeft: 'boost', ShiftRight: 'boost',
   TouchBoost: 'boost',
-  KeyB: 'bomb',
-  KeyF: 'bomb',
-  TouchBomb: 'bomb',
+  ...(BOMBS ? { KeyB: 'bomb', KeyF: 'bomb', TouchBomb: 'bomb' } : {}),
 }
 
 export default function EnzoScene({ pixelSize = 0, showHint = true, touchControls = 'auto', ...rest }) {
@@ -570,7 +572,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
     >
       <canvas
         ref={canvasRef}
-        aria-label="Enzo's day: a pixel-art 1920s biplane, built from stacked slices, flying over islands. Space moves between the overhead view, the view from behind the plane and the open cockpit; arrow keys fly it, Shift opens the throttle and trails smoke, and B drops a bomb."
+        aria-label="Enzo's day: a pixel-art 1920s biplane, built from stacked slices, flying over islands. Space moves between the overhead view, the view from behind the plane and the open cockpit; arrow keys fly it, and Shift opens the throttle and trails smoke."
         role="img"
         className="absolute block"
         style={{ imageRendering: 'pixelated' }}
@@ -656,6 +658,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
           )}
           {!onFoot && (
             <>
+              {BOMBS && (
               <button
                 type="button"
                 aria-label="Drop a bomb"
@@ -675,6 +678,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
               >
                 Bomb
               </button>
+              )}
               <button
                 type="button"
                 aria-label="Throttle: hold to open it and trail smoke"
