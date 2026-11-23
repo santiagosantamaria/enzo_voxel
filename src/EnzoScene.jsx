@@ -247,7 +247,14 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       let boost = false
       let bomb = false
       let move = 0
+      let side = 0
+      // on foot on land, A and D step sideways; the arrows still turn
+      const strafe = scene.onFoot && !scene.aboard
       held.forEach((code) => {
+        if (strafe && (code === 'KeyA' || code === 'KeyD')) {
+          side += code === 'KeyA' ? -1 : 1
+          return
+        }
         const k = FLY[code]
         if (k === 'left') turn -= 1
         else if (k === 'right') turn += 1
@@ -266,7 +273,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         }
         const aim = st && scene.aboard && Math.hypot(st.dx, st.dy) > STICK_DEAD * 1.5
         scene.setAim(aim ? st.dx : null, aim ? st.dy : null)
-        scene.setWalk(turn, move)
+        scene.setWalk(turn, move, side)
         scene.setKeys(0, 0, false)
         scene.setBomb(false)
       } else {
@@ -504,7 +511,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const hints = buttons ? TOUCH_HINTS : HINTS
   const footHint = !onFoot ? null
     : indoors
-      ? (buttons ? 'Drag to walk round the gallery · Walk out by the door · Fly back to the plane' : 'WASD walks round the gallery · Walk out by the door · V back to the plane')
+      ? (buttons ? 'Drag to walk round the gallery · Walk out by the door · Fly back to the plane' : 'W S walk · A D step aside · ← → turn · Walk out by the door · V back to the plane')
     : buttons
       ? (aboard
         ? `Tap to sail or stop · Drag the way to steer · Ashore near land · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`
@@ -514,8 +521,8 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
         ? 'W starts · S stops · A D turn · E ashore · Space for overhead · V back to the plane'
         : 'W starts · S stops · A D turn · E ashore · Space for first person · V back to the plane')
       : (footView === 'first'
-        ? 'WASD walks · E hops on a boat · Space for overhead · V back to the plane'
-        : 'WASD walks · E hops on a boat · Space for first person · V back to the plane')
+        ? 'W S walk · A D step aside · ← → turn · E hops on a boat · Space for overhead · V back to the plane'
+        : 'W S walk · A D step aside · ← → turn · E hops on a boat · Space for first person · V back to the plane')
   const buttonLook =
     'absolute flex h-16 w-20 cursor-pointer select-none items-center justify-center rounded-[5px] border font-mono text-[13px] uppercase leading-none tracking-[0.14em] text-white/90 outline-none transition-colors duration-100 focus-visible:border-white'
 

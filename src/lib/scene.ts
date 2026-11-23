@@ -502,6 +502,13 @@ function yachtDeck(y, f) {
 const yachtEyeF = (y) => y.cockpit[1] - 0.3
 const YACHT_EYE = 2.4
 const BOAT_LOOK = 4
+// walking in first person: how far ahead of the eyes the camera point is (1 / vQ), the focal length as a
+// part of the frame's longer side, where the horizon sits (a part of the height down from the top), and
+// how near the eyes a voxel may come before it is left out
+const WALK_LOOK = 4
+const WALK_FOCAL = 0.8
+const WALK_HORIZON = 0.3
+const WALK_NEAR = 0.8
 /** the aerial view aboard: a fixed diagonal, and the look-down (height : depth on screen is 1 : vTan, so tan of the angle) */
 const BOAT_ISO_YAW = Math.PI / 4
 const BOAT_ISO_TAN = 0.62
@@ -2975,7 +2982,7 @@ export function createScene(initial) {
   // within MUSEUM_R of the chapel: the rock is cleared and the ground levelled. Where there is no such rock,
   // it goes on open ground in a ring round the chapel. Its doors face the sun where they can, and else the
   // chapel. Before them a paved forecourt with a lamp at each corner, cypresses down either side, lawn round
-  // the rest, and a gravel path on to the nearest villa. Like the chapel it takes nothing from the random stream.
+  // the rest, gardens beside and behind it (museumGardens), and a gravel path on to the nearest villa. Like the chapel it takes nothing from the random stream.
   const MUSEUM_R = 240
   const isRock = (m) => m >= 12 && m <= 14
   const isPeak = (m) => m >= 12 && m <= 16 // rock or snow: what a mountain is made of
@@ -2987,6 +2994,155 @@ export function createScene(initial) {
   const museumCell = (a, f) => {
     const A = Math.abs(a)
     return f >= -MU_BACK && (A <= 6 ? f <= 9 : A <= 11 ? f <= 5 : A <= MU_SIDE && f <= 6)
+  }
+  // The museum's gardens, in the manner of the lake's villas: open lawns with gravel walks, clipped box balls
+  // and cones, beds of pink flowers, benches, cypresses, and no hedge or wall round the edge, so they can be
+  // walked into from anywhere. Either side of the building, a gravel walk and a lawn panel with a round
+  // bed. Behind it, a formal garden on terraces that follow the slope: a parterre of four lawns round a round
+  // bed in a curved hedge, a cross walk, then a long striped grass avenue between gravel walks and cypresses
+  // with a fountain halfway, closed by a statue between urns. Each part is as big as the ground allows, or
+  // left out. They take nothing from the random stream.
+  const MG_SIDE = [27, 25, 23] // how far out the side gardens may reach, widest first
+  const MG_DEPTH = [46, 38, 30, 22, 14] // how deep the back garden may be, deepest first
+  const MG_HW = 16 // its half width
+  function museumGardens(cell, c, s, cx, cy, base) {
+    const at = (a, f) => [cx + 0.5 + a * c + f * s, cy + 0.5 + a * s - f * c]
+    /** the world heading of a way (da, df) in the museum's own across and forward */
+    const heading = (da, df) => Math.atan2(da * c + df * s, -(da * s - df * c))
+    const lay = (o, m, floor, up, park = 3) => {
+      matMap[o] = m
+      floorMap[o] = up === 'tree' ? floor : floor + up
+      heightMap[o] = up === 'tree' ? floor + 8 + (o & 1) : floor + up
+      parkMap[o] = park
+    }
+    const lawnCell = (o, floor) => lay(o, M_LAWN, floor, 0)
+    const pink = (o, floor) => lay(o, M_FLOWERS[hash8(o) < 200 ? 0 : 2], floor, 1)
+    const put = (kind, a, f, z, da, df) => {
+      const [x, y] = at(a, f)
+      props.push({ kind, x, y, z, yaw: heading(da, df), alive: true })
+    }
+    // the side gardens: a gravel walk along the building, then a lawn panel
+    let sides = 0
+    for (const sg of [-1, 1]) {
+      let AW = 0
+      for (const w of MG_SIDE) {
+        let ok = true
+        for (let f = -8; f <= 14 && ok; f++) {
+          for (let A = 18; A <= w && ok; A++) {
+            const o = cell(sg * A, f)
+            if (!openLand(o) || Math.abs(floorMap[o] - base) > 3) ok = false
+          }
+        }
+        if (ok) { AW = w; break }
+      }
+      if (!AW) continue
+      sides++
+      const Ac = (21 + AW) / 2
+      for (let f = -8; f <= 14; f++) {
+        for (let A = 18; A <= AW; A++) {
+          const o = cell(sg * A, f)
+          const r = Math.hypot(A - Ac, f - 3)
+          if (A <= 19) lay(o, (A + f) & 1 ? 4 : 5, base, 0)
+          else if ((A === 21 || A === AW) && (f === -7 || f === 13)) lay(o, 36, base, 2) // a ball at each corner
+          else if (r < 0.7 || (A === Math.round(Ac) && (f === -4 || f === 10))) lay(o, 36, base, 3) // cones
+          else if (r <= 2.3 || (A === 20 && (f + 9) % 3 !== 0)) pink(o, base)
+          else lawnCell(o, base)
+        }
+      }
+      for (const f of [-3, 9]) put(P_BENCH, sg * 19, f, base, sg, 0)
+    }
+    // the back garden: how many rows behind the grounds will take it, each row levelled to its own floor
+    const rowF = []
+    let prev = base
+    for (let g = 0; g < MG_DEPTH[0]; g++) {
+      const f = MG_B - 1 - g
+      const count = new Map()
+      let ok = true
+      for (let a = -MG_HW; a <= MG_HW && ok; a++) {
+        const o = cell(a, f)
+        if (!openLand(o)) ok = false
+        else count.set(floorMap[o], (count.get(floorMap[o]) || 0) + 1)
+      }
+      if (!ok) break
+      let floor = prev
+      let most = 0
+      for (const [h, n] of count) if (n > most || (n === most && Math.abs(h - prev) < Math.abs(floor - prev))) { most = n; floor = h }
+      floor = clamp(floor, prev - 2, prev + 2) // gentle steps from one terrace to the next
+      let fits = true
+      for (let a = -MG_HW; a <= MG_HW; a++) if (Math.abs(floorMap[cell(a, f)] - floor) > 3) fits = false
+      if (!fits) break
+      rowF.push(floor)
+      prev = floor
+    }
+    const D = MG_DEPTH.find((d) => d <= rowF.length) || 0
+    if (!D) return { sides, depth: 0 }
+    const avenue = D >= 22
+    const gEnd = D - 2 // the last two rows are the terrace the statue closes
+    const gFount = 14 + Math.floor((gEnd - 14) / 2)
+    for (let g = 0; g < D; g++) {
+      const f = MG_B - 1 - g
+      const floor = rowF[g]
+      for (let a = -MG_HW; a <= MG_HW; a++) {
+        const o = cell(a, f)
+        const A = Math.abs(a)
+        const walk = () => lay(o, (a + g) & 1 ? 4 : 5, floor, 0)
+        if (g <= 1 || (g >= 12 && g <= 13) || g >= gEnd) {
+          // the cross walks, and the terrace at the far end with the statue and its urns, a cypress either side
+          if (g === D - 1 && A === 0) lay(o, M_PLINTH, floor, 1)
+          else if (g === D - 1 && A === 3) lay(o, M_PLINTH, floor, 2)
+          else if (g === D - 1 && A === 6) lay(o, 34, floor, 'tree')
+          else walk()
+          continue
+        }
+        if (g < 12) {
+          // the parterre: four lawns round a round pink bed in a curved hedge, open on the axis
+          const p = g - 2
+          const r = Math.hypot(a, p - 4.5)
+          if (r <= 2.2) pink(o, floor)
+          else if (r <= 3.2 || A <= 1) walk()
+          else if (r <= 3.9) lay(o, M_HEDGE, floor, 1)
+          else if (A === 7 || A === 8) walk()
+          else if ((A === 2 || A === 6 || A === 9) && (p === 0 || p === 9)) lay(o, 36, floor, 2)
+          else if (A === 12 && (p === 4 || p === 5)) lay(o, 36, floor, 3)
+          else if (A === 15 && p % 3 !== 2) pink(o, floor)
+          else lawnCell(o, floor)
+          continue
+        }
+        // the avenue: striped grass, gravel walks, cypresses, cones and balls, a fountain halfway
+        const r = Math.hypot(a, g - gFount)
+        if (avenue && r <= 2.9) {
+          if (r < 0.6) lay(o, M_PLINTH, floor, 2)
+          else if (r <= 2.1) lay(o, M_POOL, floor, 0)
+          else lay(o, M_STONE, floor, 1)
+        } else if (A <= 3) lay(o, (g >> 1) & 1 ? M_LAWN : 8, floor, 0)
+        else if (A <= 5) walk()
+        else if (A === 7 && (g - 14) % 3 === 0) lay(o, 34, floor, 'tree')
+        else if (A === 11 && g % 4 === 0) lay(o, 36, floor, 3)
+        else if (A === 14 && g % 4 === 2) lay(o, 36, floor, 2)
+        else if (A === 16 && g % 4 !== 3) pink(o, floor)
+        else lawnCell(o, floor)
+      }
+    }
+    // the trees round it are cleared, so it opens on to the meadow
+    for (let g = -2; g < D + 6; g++) {
+      for (let a = -MG_HW - 6; a <= MG_HW + 6; a++) {
+        const o = cell(a, MG_B - 1 - g)
+        if (!parkMap[o] && !houseMap[o] && isTree(matMap[o])) { heightMap[o] = floorMap[o]; matMap[o] = 6 }
+      }
+    }
+    // benches: at the ends of the near cross walk facing the parterre, along the avenue facing the grass
+    const fAt = (g) => MG_B - 1 - g
+    for (const sg of [-1, 1]) {
+      put(P_BENCH, sg * 12, fAt(13), rowF[13] ?? base, 0, 1)
+      for (let g = 18; g < gEnd - 2; g += 8) put(P_BENCH, sg * 5, fAt(g), rowF[g], -sg, 0)
+      put(P_URN, sg * 3, fAt(D - 1), rowF[D - 1] + 2, 0, 1)
+    }
+    put(1, 0, fAt(D - 1), rowF[D - 1] + 1, 0, 1) // the statue looks back down the garden to the museum
+    if (avenue) {
+      const [x, y] = at(0, fAt(gFount))
+      fountains.push({ x, y, z: rowF[gFount] + 2, alive: true })
+    }
+    return { sides, depth: D }
   }
   function placeMuseum() {
     museum = null
@@ -3093,6 +3249,7 @@ export function createScene(initial) {
         heightMap[o] = base + 8 + ((a + f) & 1)
       }
     }
+    const gardens = museumGardens(cell, c, s, cx, cy, base)
     // the nearest villa, and a gravel path on to it from the forecourt
     let near = null
     let nd = 1e9
@@ -3108,7 +3265,7 @@ export function createScene(initial) {
     monumentModel(M, 0)
     monumentModel(M, 1)
     worldLog.info('museum', {
-      at: [cx, cy], onRock: best.rock, rocks: rocks.length, path: pathN,
+      at: [cx, cy], onRock: best.rock, rocks: rocks.length, path: pathN, sideGardens: gardens.sides, backGarden: gardens.depth,
       fromChapel: Math.round(Math.hypot(wrapDelta(chapel.x, cx), wrapDelta(chapel.y, cy))),
     })
   }
@@ -3430,6 +3587,9 @@ export function createScene(initial) {
   let chaseYaw = 0 // heading of the chase camera (lags the jet a little in turns)
   let yawDiff = 0 // how far the chase heading is from the overhead one, kept continuous
   let vQ = 0 // 1 / camera distance: 0 is the flat sprite-stack view
+  // walking in first person, no voxel nearer than this depth is drawn: one he walks through (a bench)
+  // would otherwise fill the screen
+  let vNear = -1e9
   let vTan = 1 // how steeply the camera looks down
   let vS = 1 // scale at the jet
   let vCx = 0 // where the jet sits on screen
@@ -3454,6 +3614,7 @@ export function createScene(initial) {
   let rigGhost = 0 // first person aboard: 0 the rig solid … 1 the sails see-through, once sailing
   let walkTurn = 0
   let walkMove = 0
+  let walkSide = 0 // a step to the right (+) or the left (−), on land
   let sailing = false
   // a finger dragging on a phone, aboard or flying overhead: the way on the screen to turn to (x right, y down)
   let aimOn = false
@@ -3500,6 +3661,7 @@ export function createScene(initial) {
   }
 
   function updateView() {
+    vNear = -1e9
     if (onFoot && W > 0) {
       applyFootCamera()
       return
@@ -3953,7 +4115,7 @@ export function createScene(initial) {
       vCy = H * 0.4
     } else if (aboard >= 0) {
       // seated in the cockpit looking forward over the cabin top, rising and falling with the boat.
-      // A true wide lens, like the plane's cockpit (walking uses a long one): the eye is BOAT_LOOK
+      // A true wide lens, like the plane's cockpit and walking in first person: the eye is BOAT_LOOK
       // behind the camera point, so the boat you sit in fills the bottom of the picture.
       const b = boats[aboard]
       const Y = YACHTS[b.kind] || YACHTS[0]
@@ -3967,15 +4129,20 @@ export function createScene(initial) {
       vTan = 0
       vCy = H * 0.34
     } else {
-      cam.x = walker.x + sn * 0.35
-      cam.y = walker.y - cs * 0.35
+      // a true lens at his eyes, like the seat in a boat: the camera point is WALK_LOOK ahead of the eyes
+      // (just in front of his face), so what is behind him or right beside him falls outside the picture
+      // by itself. (A long lens, with the eye far behind him, drew a wall at his back across the screen.)
+      const fe = 0.35 + WALK_LOOK
+      cam.x = walker.x + sn * fe
+      cam.y = walker.y - cs * fe
       cam.alt = baseZ + 4.5 // the man's eyes
-      const floor = walkFloor(cam.x, cam.y) + 1.4
+      const floor = walkFloor(walker.x, walker.y) + 1.4
       if (cam.alt < floor) cam.alt = floor
-      vQ = 1 / 26
-      vTan = 0.16
-      vS = 24
-      vCy = H * 0.48
+      vQ = 1 / WALK_LOOK
+      vS = (WALK_FOCAL * Math.max(W, H)) / WALK_LOOK
+      vTan = 0
+      vCy = H * WALK_HORIZON
+      vNear = WALK_NEAR - WALK_LOOK
     }
     vSteerY = vCy
     vLean = vTan
@@ -3991,6 +4158,7 @@ export function createScene(initial) {
       boostKey = false
       walkTurn = 0
       walkMove = 0
+      walkSide = 0
       sailing = false
       loungeReset()
       footLog.info('back to the jet')
@@ -4063,9 +4231,10 @@ export function createScene(initial) {
     aimX = aimOn ? dx : 0
     aimY = aimOn ? dy : 0
   }
-  function setWalk(turn, move) {
+  function setWalk(turn, move, side = 0) {
     walkTurn = clamp(turn, -1, 1)
     walkMove = clamp(move, -1, 1)
+    walkSide = clamp(side, -1, 1)
   }
   function board() {
     if (!onFoot || indoors) return false
@@ -4175,7 +4344,7 @@ export function createScene(initial) {
   function stepFoot(dt) {
     if (!onFoot) return
     if (indoors) {
-      if (room.step(dt, walkTurn, walkMove)) leaveMuseum()
+      if (room.step(dt, walkTurn, walkMove, walkSide)) leaveMuseum()
       return
     }
     if (aboard >= 0) {
@@ -4214,10 +4383,13 @@ export function createScene(initial) {
       return
     }
     walker.yaw += walkTurn * 2.1 * dt
-    if (walkMove !== 0) {
-      const spd = walkMove * 20
-      const nx = walker.x + Math.sin(walker.yaw) * spd * dt
-      const ny = walker.y - Math.cos(walker.yaw) * spd * dt
+    if (walkMove !== 0 || walkSide !== 0) {
+      // forward is (sin, −cos) and right is (cos, sin); a diagonal is no faster than a straight walk
+      const sn = Math.sin(walker.yaw)
+      const cs = Math.cos(walker.yaw)
+      const k = (20 * dt) / Math.max(1, Math.hypot(walkMove, walkSide))
+      const nx = walker.x + (sn * walkMove + cs * walkSide) * k
+      const ny = walker.y + (-cs * walkMove + sn * walkSide) * k
       if (atMuseumDoor(nx, ny)) {
         enterMuseum()
         return
@@ -5667,7 +5839,7 @@ export function createScene(initial) {
       if (Math.abs(dn) < 1e-6) continue
       const d = (zr - k) / dn
       const den = 1 + q * d
-      if (den < 0.15) continue
+      if (den < 0.15 || d < vNear) continue
       const m = S / den
       // world offset from the animal, as a line in screen x: l = base + step * px
       const lx0 = ox - s * d
@@ -6181,7 +6353,7 @@ export function createScene(initial) {
       const V = yOV + a1 * yAV + f1 * yFV
       const Wz = yOW + z2
       const den = 1 + q * V
-      if (den < 0.15) continue
+      if (den < 0.15 || V < vNear) continue
       const m = S / den
       const sx = Cx + m * U
       const sy = Cy - m * (Wz + tn * V)
@@ -6298,7 +6470,7 @@ export function createScene(initial) {
 
   /** a lamp at a world point that is not a voxel: its glow, worldR across, unless the ground is in front */
   function lampGlow(x, y, z, worldR, col, a) {
-    if (a <= 0.02 || !project(x, y, z)) return
+    if (a <= 0.02 || !project(x, y, z) || prV < vNear) return
     const px = Math.floor(prX)
     const py = Math.floor(prY)
     if (px < colLo || py < rowLo || px >= colHi || py >= rowHi) return
@@ -6322,7 +6494,7 @@ export function createScene(initial) {
     const Wz = yOW + z2
     const q = vQ
     const den = 1 + q * V
-    if (den < 0.15) return false
+    if (den < 0.15 || V < vNear) return false
     const m = vS / den
     prX = vCx + m * U
     prY = vCy - m * (Wz + vTan * V)
@@ -6804,7 +6976,7 @@ export function createScene(initial) {
   function drawWalker() {
     if (!onFoot || footView !== 0 || aboard >= 0) return
     ensureAkey()
-    const moving = walkMove !== 0
+    const moving = walkMove !== 0 || walkSide !== 0
     const stride = moving ? Math.sin(time * 9) : 0
     // a little lift each time the legs pass
     const base = walker.z + (moving ? Math.abs(Math.cos(time * 9)) * 0.08 : 0)
