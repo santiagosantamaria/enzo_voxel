@@ -95,6 +95,15 @@ While walking, Space does not change the jet’s view. It toggles the person bet
 
 Click (pointer down and up in under 0.2s) barrel-rolls the plane. Holding the pointer, or Shift, opens the throttle and trails display smoke. A roll does not happen on foot.
 
+**The developer view.** I and Q held together (on a keyboard; there is no button) switch it on and off, from the plane, on foot, aboard or in the museum. It is a free camera over the map with the isometric view aboard (`vQ = 0`), tied to nothing:
+
+- It starts over wherever the player is, the player in the middle of the screen (for the plane high up, centred on the ground it is drawn over), with the heading, zoom and tilt as aboard (`BOAT_ISO_YAW`, `DEV_ZOOM` 4, `BOAT_ISO_TAN`). The zoom is set back every time it starts.
+- W A S D move it across the screen (up, left, down, right), at `DEV_PAN` (0.45) of the frame's width a second at any zoom; Shift moves it `DEV_FAST` (3) times as fast. ← → turn it (`DEV_TURN`, 1.5 radians a second; → turns the camera right). ↑ ↓ tilt it, between `DEV_TILT_MIN` (0.3, low over the land) and `DEV_TILT_MAX` (1, straight down as from the plane overhead). The wheel zooms, about the middle of the screen, from `DEV_ZOOM_MIN` (1) to `DEV_ZOOM_MAX` (32), and does not scroll the page. The height it is centred on (`dev.alt`) follows the ground under the middle of the screen (`devGround`), so a hill does not slide off the screen.
+- N switches day and night as in the game. C shows the clouds or takes them away (`toggleDevClouds`): they are off at first, and stay as last left the next time it starts. V, E, Space and clicks do nothing, so no hand is on the player.
+- Flowers bloom from zoom 4 in. Enzo is drawn even if he was left in first person, and the museum's gallery is not drawn: the map is.
+- While it is on, `step` moves the camera (`stepDev`) and the game goes on under it with no hand on the player: the plane flies straight on at its cruising height (its turn eases out, as when the keys are let go), the man stands still, a boat under sail sails on. Leaving it goes back to the player wherever they are now, in the view they were in.
+- `scene.toggleDev()`, `setDev(mx, my, turn, lift, fast)`, `devWheel(dy)` and `toggleDevClouds()` are its API; `scene.devView` and `scene.devClouds` say whether it is on and shows the clouds. `applyDevCamera` sets the camera in `updateView`, ahead of every other view.
+
 ## Controls
 
 `EnzoScene` keeps the keys that are down and calls `setKeys`, `setWalk`, `setBomb`.
@@ -112,6 +121,7 @@ Click (pointer down and up in under 0.2s) barrel-rolls the plane. Holding the po
 | N | Night, or back to day, over 9 seconds | Same | Same |
 | Click | Roll if short, throttle if held | — | — |
 | Pointer | Steers until a key is used | Ignored | Ignored |
+| I + Q | The developer view, or back (see "Views") | Same | Same |
 
 Pitch is inverted only for the jet, and only in `sendKeys`: Up subtracts from climb, Down adds. Walking uses the same keys with the natural sign (Up adds to move). Do not reuse the flight sign for the person.
 

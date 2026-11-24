@@ -20,6 +20,7 @@ import { createMuseumRoom } from './museum-room.ts'
 
 const worldLog = log.child('world')
 const footLog = log.child('foot')
+const devLog = log.child('dev')
 const boatLog = log.child('boat')
 
 
@@ -613,6 +614,18 @@ const BOAT_ISO_TAN = 0.62
 /** there, clouds open (and a plane turns to a ghost) within this many units of the boat's middle, BOAT_ISO_MID up */
 const BOAT_ISO_HOLE = 27
 const BOAT_ISO_MID = 5.5
+// the developer view (I and Q together): a free camera over the map, with the aerial view aboard and tied to
+// nothing. W A S D move it across the screen, ← → turn it, ↑ ↓ tilt it, the wheel zooms, Shift hurries it.
+// Each time it starts, the heading, the zoom and the tilt are as aboard. C shows or hides the clouds.
+const DEV_ZOOM = 4 // pixels a unit at the start, as aboard …
+const DEV_ZOOM_MIN = 1 // … how far out …
+const DEV_ZOOM_MAX = 32 // … and how far in it goes
+const DEV_PAN = 0.45 // how fast it moves: this much of the frame's width a second, at any zoom (Shift: DEV_FAST times that)
+const DEV_FAST = 3
+const DEV_TURN = 1.5 // how fast it turns, radians a second
+const DEV_TILT = 0.5 // how fast it tilts a second (the look-down, as BOAT_ISO_TAN) …
+const DEV_TILT_MIN = 0.3 // … from low over the land …
+const DEV_TILT_MAX = 1 // … to straight down, as from the plane overhead
 /** walking, seen from above: the clouds open within this many units of the man's middle, WALK_MID up */
 const WALK_HOLE = 8
 const WALK_MID = 2
@@ -3790,6 +3803,11 @@ export function createScene(initial) {
   let walkMove = 0
   let walkSide = 0 // a step to the right (+) or the left (−), on land
   let sailing = false
+  // the developer view: whether it is on; where it looks (and the height it is centred on), its heading, zoom
+  // and tilt; and the keys held: across and up the screen, turn, tilt (each −1..1), and Shift
+  let devOn = false
+  let devClouds = false // C in the developer view: the clouds shown or not (off at first, then as last left)
+  const dev = { x: 0, y: 0, alt: 0, yaw: BOAT_ISO_YAW, zoom: DEV_ZOOM, tilt: BOAT_ISO_TAN, mx: 0, my: 0, turn: 0, lift: 0, fast: false }
   // a finger dragging on a phone, aboard or flying overhead: the way on the screen to turn to (x right, y down)
   let aimOn = false
   let aimX = 0
@@ -3836,6 +3854,10 @@ export function createScene(initial) {
 
   function updateView() {
     vNear = -1e9
+    if (devOn && W > 0) {
+      applyDevCamera()
+      return
+    }
     if (onFoot && W > 0) {
       applyFootCamera()
       return
@@ -4028,11 +4050,12 @@ export function createScene(initial) {
     holding = false
   }
   function press() {
+    if (devOn) return
     holding = true
     holdT = 0
   }
   function release() {
-    if (!onFoot && holding && holdT < HOLD) startRoll() // a click rolls; a hold was the thrusters
+    if (!onFoot && !devOn && holding && holdT < HOLD) startRoll() // a click rolls; a hold was the thrusters
     holding = false
   }
   /** arrow keys / WASD: turn −1..1, climb −1..1 (chase view), and whether the boost key is down */
@@ -4391,6 +4414,95 @@ export function createScene(initial) {
   function toggleFootView() {
     if (!onFoot || indoors) return
     footView = footView === 0 ? 1 : 0
+  }
+  /**
+   * I and Q together: into the developer view, over wherever the player is (the plane, the man, the boat), or
+   * back out to the player. While it is on the game goes on with no hand on it: the plane flies straight on
+   * at its cruising height, the man stands still, a boat under sail sails on.
+   */
+  function toggleDev() {
+    devOn = !devOn
+    if (devOn) {
+      const lead = jets[0]
+      dev.yaw = BOAT_ISO_YAW
+      dev.zoom = DEV_ZOOM
+      dev.tilt = BOAT_ISO_TAN
+      dev.x = onFoot ? walker.x : lead.x
+      dev.y = onFoot ? walker.y : lead.y
+      dev.alt = devGround()
+      // centred on the ground the player is drawn over (further up the screen, for the plane high above it),
+      // so the player starts in the middle of the screen
+      const up = Math.max(0, (onFoot ? walker.z : lead.z) - dev.alt) / dev.tilt
+      dev.x -= Math.sin(dev.yaw) * up
+      dev.y -= Math.cos(dev.yaw) * up
+      dev.alt = devGround()
+      holding = false
+    }
+    dev.mx = dev.my = dev.turn = dev.lift = 0
+    dev.fast = false
+    devLog.info(devOn ? 'on' : 'off', { x: dev.x | 0, y: dev.y | 0 })
+    return devOn
+  }
+  /** the developer view's keys: across (+ right) and up the screen (+ up), turn (+ right), tilt (+ towards straight down) */
+  function setDev(mx, my, turn, lift, fast) {
+    dev.mx = clamp(mx, -1, 1)
+    dev.my = clamp(my, -1, 1)
+    dev.turn = clamp(turn, -1, 1)
+    dev.lift = clamp(lift, -1, 1)
+    dev.fast = !!fast
+  }
+  /** C in the developer view: show the clouds, or take them away again */
+  function toggleDevClouds() {
+    if (!devOn) return devClouds
+    devClouds = !devClouds
+    devLog.info(devClouds ? 'clouds on' : 'clouds off')
+    return devClouds
+  }
+  /** the wheel in the developer view: dy as a wheel's deltaY in pixels, down (+) zooms out */
+  function devWheel(dy) {
+    if (!devOn) return
+    dev.zoom = clamp(dev.zoom * Math.exp(-dy * 0.0015), DEV_ZOOM_MIN, DEV_ZOOM_MAX)
+  }
+  /** the height the developer view is centred on: the ground round the middle of the screen, on average */
+  function devGround() {
+    let s = 0
+    for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) s += groundAt(dev.x + i * 4, dev.y + j * 4)
+    return s / 25
+  }
+  function stepDev(dt) {
+    dev.yaw = wrapAngle(dev.yaw - dev.turn * DEV_TURN * dt)
+    dev.tilt = clamp(dev.tilt + dev.lift * DEV_TILT * dt, DEV_TILT_MIN, DEV_TILT_MAX)
+    // right across the screen is (cos, −sin) on the map and up it (further in) is (−sin, −cos), which the
+    // tilt shortens on the screen, so it is crossed faster to look as fast
+    const k = (DEV_PAN * W * (dev.fast ? DEV_FAST : 1) * dt) / dev.zoom
+    const c = Math.cos(dev.yaw)
+    const s = Math.sin(dev.yaw)
+    const r = dev.mx * k
+    const u = (dev.my * k) / dev.tilt
+    dev.x += r * c - u * s
+    dev.y += -r * s - u * c
+    // the height it is centred on follows the ground, so a hill does not slide off the screen when zoomed in
+    dev.alt += (devGround() - dev.alt) * (1 - Math.exp(-dt * 4))
+  }
+  function applyDevCamera() {
+    vC = 0
+    vK = 0
+    vIn = 0
+    vQ = 0
+    vRoll = 0
+    jetFade = 1
+    vLean = 1
+    vTan = dev.tilt
+    vS = dev.zoom
+    vYaw = dev.yaw
+    vCos = Math.cos(vYaw)
+    vSin = Math.sin(vYaw)
+    cam.x = dev.x
+    cam.y = dev.y
+    cam.alt = dev.alt
+    vCx = W >> 1
+    vCy = H >> 1
+    vSteerY = vCy
   }
   /** a phone: turn the boat, or the plane overhead, to the way a finger drags on the screen (x right, y down),
    * or null when the finger lets go. Let go of the plane, it flies straight on, as after the keys. */
@@ -5019,6 +5131,8 @@ export function createScene(initial) {
     }
     const introDone = introT > 1.9
     burn += ((introDone ? 1 : 0) - burn) * (1 - Math.exp(-dt * 5))
+    // the developer view moves its own camera; the game goes on under it, the plane flying straight on
+    if (devOn) stepDev(dt)
 
     // holding down opens the thrusters: longer flames, more speed
     const pushing = introDone && ((holding && holdT >= HOLD) || boostKey)
@@ -5045,10 +5159,10 @@ export function createScene(initial) {
     // where to turn and, from behind, how high to fly
     let want = 0
     let flown = false // true while the player is choosing the height
-    if (onFoot) keyMode = false
+    if (onFoot || devOn) keyMode = false
     const steering = !onFoot && p.followPointer && pointerOn && pointerIdle < 5
-    if (!introDone) {
-      want = 0
+    if (!introDone || devOn) {
+      want = 0 // in the developer view it flies straight on, at its cruising height
     } else if (!onFoot && aimOn && !chase) {
       // a finger dragging overhead: turn to point the way of the drag, as in a boat
       flown = true
@@ -5385,15 +5499,16 @@ export function createScene(initial) {
     f.bx = bx
     f.by = by
     f.rankMax = Math.round(clamp(p.clouds, 0, 1) * 16)
-    f.cloudsOn = f.rankMax > 0
+    f.cloudsOn = f.rankMax > 0 && (!devOn || devClouds) // the developer view looks at the map, clear of clouds unless C
     // the isometric view aboard looks down at a shallow angle, so a cloud would sit over the boat:
     // the clouds open a round hole around it, its rim dithered so it reads as thinning cloud
-    f.holeR = onFoot && aboard >= 0 && footView === 0 ? BOAT_ISO_HOLE * S : 0
+    const iso = onFoot && aboard >= 0 && footView === 0 && !devOn
+    f.holeR = iso ? BOAT_ISO_HOLE * S : 0
     f.holeCx = Cx
     f.holeCy = Cy - BOAT_ISO_MID * S
     // walking, seen from above and behind: a cloud can drift between the camera and the man, so the
     // clouds open around him too, sized by how big he is on the screen
-    if (onFoot && aboard < 0 && footView === 0) {
+    if (onFoot && aboard < 0 && footView === 0 && !devOn) {
       const x = walker.x - N * Math.round((walker.x - cam.x) / N)
       const y = walker.y - N * Math.round((walker.y - cam.y) / N)
       if (project(x, y, walker.z + WALK_MID)) {
@@ -5418,7 +5533,7 @@ export function createScene(initial) {
     // flowers only show near the ground: on foot or aboard, or from the plane flying low in the chase
     // and cockpit views; never from the view overhead. Elsewhere a flower cell is plain green.
     const lead = jets[0]
-    f.blooms = onFoot || (viewTarget !== 0 && lead.z - groundAt(lead.x, lead.y) < BLOOM_ALT)
+    f.blooms = devOn ? vS >= DEV_ZOOM : onFoot || (viewTarget !== 0 && lead.z - groundAt(lead.x, lead.y) < BLOOM_ALT)
     let nShadow = 0
     if (p.shadow && introT > 0.3) {
       for (let j = 0; j < jets.length && j < 3; j++) {
@@ -6832,7 +6947,7 @@ export function createScene(initial) {
     const reach = (half + Y.sprit + 15) * m0
     if (prX < -reach || prX > W + reach || prY - 14 * m0 > H + reach || prY < -reach) return
     const own = idx === aboard
-    const firstPerson = own && footView === 1
+    const firstPerson = own && footView === 1 && !devOn
     // in first person the eye is in the cockpit: nothing behind it is drawn, the wake included
     const cut = firstPerson ? yachtEyeF(Y) + 0.5 : -1e9
     // the wake: a V spreading from the bow and churned water behind the stern
@@ -7245,7 +7360,7 @@ export function createScene(initial) {
   }
 
   function drawWalker() {
-    if (!onFoot || footView !== 0 || aboard >= 0) return
+    if (!onFoot || (footView !== 0 && !devOn) || aboard >= 0) return
     ensureAkey()
     const moving = walkMove !== 0 || walkSide !== 0
     const stride = moving ? Math.sin(time * 9) : 0
@@ -7414,7 +7529,7 @@ export function createScene(initial) {
     const cx = vCx + m0 * cU
     const cy = vCy - m0 * (cW + tn * cV)
     // the isometric view aboard: a plane passing over the boat turns to a ghost, as the clouds open there
-    if (onFoot && aboard >= 0 && footView === 0) {
+    if (onFoot && aboard >= 0 && footView === 0 && !devOn) {
       const R = BOAT_ISO_HOLE * S
       const hx = cx - vCx
       const hy = (cy - (vCy - BOAT_ISO_MID * S)) * 1.15
@@ -7698,7 +7813,7 @@ export function createScene(initial) {
 
   function render() {
     if (W === 0) return bytes
-    if (onFoot && indoors) {
+    if (onFoot && indoors && !devOn) {
       flameOut.count = 0
       room.render(fb, W, H, lampK)
       return bytes
@@ -7810,6 +7925,14 @@ export function createScene(initial) {
     dropBomb,
     toggleFoot,
     toggleFootView,
+    toggleDev,
+    setDev,
+    devWheel,
+    toggleDevClouds,
+    /** the developer view is on */
+    get devView() { return devOn },
+    /** the developer view shows the clouds */
+    get devClouds() { return devClouds },
     setWalk,
     board,
     sailToggle,

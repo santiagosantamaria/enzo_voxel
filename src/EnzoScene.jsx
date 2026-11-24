@@ -15,6 +15,10 @@ const HINTS = {
   cockpit: 'Point to turn, climb and dive · Click to roll · Hold for throttle and smoke · V to walk · Space for overhead',
 }
 
+// the developer view (I and Q together): a free camera over the map, tied to nothing
+const devHint = (clouds) =>
+  `Developer view · W A S D move · ← → turn · ↑ ↓ tilt · Wheel zooms · Shift faster · C clouds ${clouds ? 'off' : 'on'} · I + Q to leave`
+
 const TOUCH_HINTS = {
   top: 'Drag the way to fly · Tap to roll · Hold Boost · View for chase view · Walk to go on foot',
   chase: 'Drag to turn, climb and dive · Tap to roll · Hold Boost · View for the cockpit · Walk to go on foot',
@@ -64,6 +68,8 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const [footView, setFootView] = useState('above')
   const [canBoard, setCanBoard] = useState(false) // a boat in reach on foot, or a shore aboard
   const [indoors, setIndoors] = useState(false) // walking the gallery inside the museum
+  const [devView, setDevView] = useState(false) // the developer view's free camera
+  const [devClouds, setDevClouds] = useState(false) // … and whether it shows the clouds (C)
   const indoorsRef = useRef(false)
   // the first time aboard, how to sail glows softly in the hint until the boat sails or is left
   const [sailCue, setSailCue] = useState(false)
@@ -244,6 +250,27 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
     const held = heldRef.current
     held.clear()
     const sendKeys = () => {
+      if (scene.devView) {
+        // the developer view: W A S D move the camera across the screen, ← → turn it, ↑ ↓ tilt it
+        let mx = 0
+        let my = 0
+        let turn = 0
+        let lift = 0
+        let fast = false
+        held.forEach((code) => {
+          if (code === 'KeyA') mx -= 1
+          else if (code === 'KeyD') mx += 1
+          else if (code === 'KeyW') my += 1
+          else if (code === 'KeyS') my -= 1
+          else if (code === 'ArrowLeft') turn -= 1
+          else if (code === 'ArrowRight') turn += 1
+          else if (code === 'ArrowUp') lift += 1
+          else if (code === 'ArrowDown') lift -= 1
+          else if (code === 'ShiftLeft' || code === 'ShiftRight') fast = true
+        })
+        scene.setDev(mx, my, turn, lift, fast)
+        return
+      }
       let turn = 0
       let climb = 0
       let boost = false
@@ -297,6 +324,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
     sendKeysRef.current = sendKeys
     // V: become the man, or go back to the plane; E: board the nearest boat, or step ashore
     const toggleWalk = () => {
+      if (scene.devView) return
       held.delete('TouchBoost')
       held.delete('TouchBomb')
       setBoosting(false)
@@ -312,7 +340,7 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       if (!scene.onFoot) revealHintRef.current(scene.view, 7)
     }
     const board = () => {
-      if (!scene.onFoot) return
+      if (!scene.onFoot || scene.devView) return
       scene.board()
       sendKeys()
       setAboard(scene.aboard)
@@ -324,12 +352,46 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       setCanBoard(scene.canBoard)
     }
     actionsRef.current = { toggleWalk, board }
+    // I and Q held together: into the developer view or back out. Whatever the player was holding is let go
+    // first, so the plane, the man or the boat is left still, and the camera starts still.
+    const chord = new Set()
+    const toggleDev = () => {
+      held.clear()
+      stickRef.current = null
+      if (ringRef.current) ringRef.current.style.display = 'none'
+      setBoosting(false)
+      setBombing(false)
+      sendKeys()
+      scene.toggleDev()
+      sendKeys()
+      setDevView(scene.devView)
+    }
     const typing = (e) => {
       const el = e.target
       return !!el && el !== wrap && (/^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(el.tagName) || el.isContentEditable)
     }
     const onKey = (e) => {
       if (typing(e)) return
+      if ((e.code === 'KeyI' || e.code === 'KeyQ') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (e.repeat) return
+        chord.add(e.code)
+        if (chord.has('KeyI') && chord.has('KeyQ')) {
+          e.preventDefault()
+          toggleDev()
+        }
+        return
+      }
+      // C in the developer view: the clouds on or off
+      if (scene.devView && e.code === 'KeyC' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        if (!e.repeat) setDevClouds(scene.toggleDevClouds())
+        return
+      }
+      // in the developer view V, E and Space would move the player, who is left as they were
+      if (scene.devView && (e.code === 'KeyV' || e.code === 'KeyE' || e.code === 'Space' || e.key === ' ')) {
+        e.preventDefault()
+        return
+      }
       if (e.code === 'KeyV' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
         toggleWalk()
@@ -366,9 +428,17 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       }
     }
     const onKeyUp = (e) => {
+      chord.delete(e.code)
       if (held.delete(e.code)) sendKeys()
     }
+    // the wheel zooms the developer view (and only it), towards the middle of the screen
+    const onWheel = (e) => {
+      if (!scene.devView) return
+      e.preventDefault()
+      scene.devWheel(e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1))
+    }
     const onBlur = () => {
+      chord.clear()
       held.clear()
       sendKeys()
       setBoosting(false)
@@ -377,12 +447,14 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
     window.addEventListener('keydown', onKey)
     window.addEventListener('keyup', onKeyUp)
     window.addEventListener('blur', onBlur)
+    wrap.addEventListener('wheel', onWheel, { passive: false })
 
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('keyup', onKeyUp)
+      wrap.removeEventListener('wheel', onWheel)
       window.removeEventListener('blur', onBlur)
       window.clearTimeout(hintTimer.current)
       fire?.removeEventListener('webglcontextlost', onFireLost)
@@ -592,16 +664,16 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       </div>
       {showHint && (
         <div
-          className={`pointer-events-none absolute inset-x-0 flex justify-center px-4 transition-opacity duration-700 ${buttons || hint.mode === 'cockpit' || (onFoot && (footView === 'first' || indoors)) ? 'top-4' : 'bottom-4'}`}
-          style={{ opacity: onFoot || hint.on ? 1 : 0 }}
+          className={`pointer-events-none absolute inset-x-0 flex justify-center px-4 transition-opacity duration-700 ${!devView && (buttons || hint.mode === 'cockpit' || (onFoot && (footView === 'first' || indoors))) ? 'top-4' : 'bottom-4'}`}
+          style={{ opacity: onFoot || devView || hint.on ? 1 : 0 }}
         >
           <p
             className={`rounded-[3px] bg-[#0b1a33]/55 px-2.5 py-1.5 text-center font-mono uppercase tracking-[0.14em] text-white/90 ${buttons ? 'text-[12px] leading-[1.4]' : 'text-[11px] leading-none'}`}
             style={{ textShadow: '0 1px 0 rgba(0,0,0,.45)' }}
           >
             {(() => {
-              const text = (footHint || hints[hint.mode]) + (buttons ? '' : night ? ' · N for day' : ' · N for night')
-              if (!(sailCue && aboard)) return text
+              const text = (devView ? devHint(devClouds) : footHint || hints[hint.mode]) + (buttons ? '' : night ? ' · N for day' : ' · N for night')
+              if (devView || !(sailCue && aboard)) return text
               // the first part says how to sail: it glows
               const cut = text.indexOf(' · ', buttons ? 0 : text.indexOf(' · ') + 1)
               return (
