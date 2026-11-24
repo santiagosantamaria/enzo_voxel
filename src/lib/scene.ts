@@ -808,8 +808,9 @@ const FLOAT_LEN = 12 // cells along
 const FLOAT_HW = 2.5 // half its width across (5 cells)
 const FLOAT_BERTH = 4.3 // from its middle line to the moored sloop's: half its width, half the beam, a gap
 const FLOAT_DECK = 1 // its height over the water, as a pier's
-// the woman sits at Enzo's size on deck, so she and the boat beside her look alike in scale
-const SITTER_SCALE = LOUNGE_SCALE
+// the woman: a little bigger than Enzo on deck (LOUNGE_SCALE), so she shows beside the boat, still well
+// under the man on foot
+const SITTER_SCALE = 0.7
 const SITTER_HIP = 1.38 // her thighs, nearly level on the planks
 /**
  * a figure on the man's frame (PERSON_HIP, PERSON_KNEE, PERSON_SHOULDER), as surface voxels of PERSON_G.
