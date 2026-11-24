@@ -812,6 +812,12 @@ const FLOAT_DECK = 1 // its height over the water, as a pier's
 // under the man on foot
 const SITTER_SCALE = 0.7
 const SITTER_HIP = 1.38 // her thighs, nearly level on the planks
+// the man sits on the edge beside her, the same way, after SIT_BY_WAIT seconds standing still within
+// SIT_BY_REACH of the place: SIT_BY_GAP along the edge from her, from SIT_BY_STAND in from it
+const SIT_BY_WAIT = 3
+const SIT_BY_REACH = 4
+const SIT_BY_GAP = 1.7
+const SIT_BY_STAND = 0.9
 /**
  * a figure on the man's frame (PERSON_HIP, PERSON_KNEE, PERSON_SHOULDER), as surface voxels of PERSON_G.
  * build(box, one) lays it out: box(a0, a1, f0, f1, z0, z1, part, col, hint, skip) adds a box, and one(m)
@@ -4020,7 +4026,7 @@ export function createScene(initial) {
   let benchRest = 0
   let benchT = 0
   let benchDir = 0
-  const sit = { x0: 0, y0: 0, hx: 0, hy: 0, hz: 0, sx: 0, sy: 0, z: 0, yaw: 0, go: 0, travel: 0, turn0: 0 }
+  const sit = { x0: 0, y0: 0, hx: 0, hy: 0, hz: 0, sx: 0, sy: 0, z: 0, yaw: 0, go: 0, travel: 0, turn0: 0, hip: 0, edge: false }
   // his pose this frame: where he is and how high his feet are, his heading, the thighs, knees and arms
   // swung forward, and his lean back
   const seatPose = { x: 0, y: 0, base: 0, floor: 0, yaw: 0, hip1: 0, hip2: 0, knee1: 0, knee2: 0, arm1: 0, arm2: 0, lean: 0 }
@@ -4866,9 +4872,42 @@ export function createScene(initial) {
       if (!standable(Math.floor(hx), Math.floor(hy)) || Math.abs(walkFloor(hx, hy) - p.z) > 1) continue
       bestD = d
       found = true
-      Object.assign(sit, { sx, sy, hx, hy, hz: walkFloor(hx, hy), z: p.z, yaw: p.yaw })
+      Object.assign(sit, { sx, sy, hx, hy, hz: walkFloor(hx, hy), z: p.z, yaw: p.yaw, hip: p.z + BENCH_SEAT, edge: false })
     }
-    if (!found) return false
+    return found && seatGo()
+  }
+  /**
+   * a place on the floating dock's edge beside someone sat on it, within SIT_BY_REACH of him, standing a
+   * little in from the edge, on the planks: into sit, as seatNear. False if there is none.
+   */
+  function edgeNear() {
+    let bestD = SIT_BY_REACH * SIT_BY_REACH
+    let found = false
+    // sat, his knees come 0.3 past the edge, as hers do
+    const back = Math.sin(SITTER_HIP) * (PERSON_HIP - PERSON_KNEE) - 0.3
+    for (const w of sitters) {
+      const fx = Math.sin(w.yaw)
+      const fy = -Math.cos(w.yaw)
+      const ex = walker.x + wrapDelta(w.x, walker.x)
+      const ey = walker.y + wrapDelta(w.y, walker.y)
+      for (const side of [-1, 1]) {
+        // along the edge is (−fy, fx)
+        const px = ex - fy * side * SIT_BY_GAP
+        const py = ey + fx * side * SIT_BY_GAP
+        const d = (px - walker.x) ** 2 + (py - walker.y) ** 2
+        if (d >= bestD) continue
+        const hx = px - fx * SIT_BY_STAND
+        const hy = py - fy * SIT_BY_STAND
+        if (!standable(Math.floor(hx), Math.floor(hy)) || Math.abs(walkFloor(hx, hy) - w.z) > 0.5) continue
+        bestD = d
+        found = true
+        Object.assign(sit, { sx: px - fx * back, sy: py - fy * back, hx, hy, hz: walkFloor(hx, hy), z: w.z, yaw: w.yaw, hip: w.z + 0.25, edge: true })
+      }
+    }
+    return found && seatGo()
+  }
+  /** from where he stands to the seat in sit: how long the stroll takes, and which way he sets off */
+  function seatGo() {
     sit.x0 = walker.x
     sit.y0 = walker.y
     const dist = Math.hypot(sit.hx - sit.x0, sit.hy - sit.y0)
@@ -4905,16 +4944,26 @@ export function createScene(initial) {
       q.yaw = s.turn0 + wrapAngle(s.yaw - s.turn0) * ease((t - s.go) / BENCH_TURN)
     } else {
       // down onto the seat: the hips go back over it and down, the thighs come up ahead of the drop, the
-      // shins stay upright, the hands come to rest on the thighs and he leans back a little
+      // shins stay upright, the hands come to rest on the thighs and he leans back a little. On a dock's
+      // edge the thighs come up level, the shins hang over the water and swing, and he leans back on his hands.
       const k = clamp((t - s.go - BENCH_TURN) / BENCH_SIT, 0, 1)
       const e = ease(k)
       q.x = s.hx + (s.sx - s.hx) * e
       q.y = s.hy + (s.sy - s.hy) * e
       q.floor = s.hz + (s.z - s.hz) * e
-      q.base = s.hz + (s.z + BENCH_SEAT - PERSON_HIP - s.hz) * e ** 1.6
-      q.hip1 = q.hip2 = q.knee1 = q.knee2 = BENCH_HIP * ease(Math.min(1, k * 1.3))
-      q.arm1 = q.arm2 = 0.45 * e
-      q.lean = 0.06 * e
+      q.base = s.hz + (s.hip - PERSON_HIP - s.hz) * e ** 1.6
+      q.hip1 = q.hip2 = q.knee1 = q.knee2 = (s.edge ? SITTER_HIP : BENCH_HIP) * ease(Math.min(1, k * 1.3))
+      if (s.edge) {
+        const sway = 0.2 * e * Math.sin(time * 1.3 + 1)
+        q.knee1 -= sway
+        q.knee2 += sway * 0.8
+        q.arm1 = -0.3 * e
+        q.arm2 = -0.36 * e
+        q.lean = 0.18 * e
+      } else {
+        q.arm1 = q.arm2 = 0.45 * e
+        q.lean = 0.06 * e
+      }
     }
     return q
   }
@@ -4929,12 +4978,16 @@ export function createScene(initial) {
     if (benchDir === 0) {
       const still = footView === 0 && walkMove === 0 && walkTurn === 0 && walkSide === 0 && !aimOn
       benchRest = still ? benchRest + dt : 0
-      if (benchRest < BENCH_WAIT) return false
-      benchRest = 0
-      if (!seatNear()) return false
+      // a moment by someone sat on a dock's edge, and he sits down beside them; longer by a bench
+      if (benchRest < SIT_BY_WAIT) return false
+      if (!(sitters.length > 0 && edgeNear())) {
+        if (benchRest < BENCH_WAIT) return false
+        benchRest = 0
+        if (!seatNear()) return false
+      }
       benchDir = 1
       benchT = 0
-      footLog.info('sits on a bench', { x: sit.sx | 0, y: sit.sy | 0 })
+      footLog.info(sit.edge ? 'sits on the dock edge' : 'sits on a bench', { x: sit.sx | 0, y: sit.sy | 0 })
     }
     const up = walkMove !== 0 || walkTurn !== 0 || walkSide !== 0 || aimOn
     // in first person the eye is his, on his feet; on the way there a key stops him where he is
@@ -4945,7 +4998,7 @@ export function createScene(initial) {
     if (benchDir > 0 && up) {
       benchDir = -1
       sit.turn0 = walker.yaw
-      footLog.info('gets up from the bench')
+      footLog.info(sit.edge ? 'gets up from the dock edge' : 'gets up from the bench')
     }
     benchT = Math.min(benchLen(), benchT + benchDir * dt * (benchDir < 0 ? BENCH_BACK : 1))
     if (benchDir < 0 && benchT <= sit.go) {
