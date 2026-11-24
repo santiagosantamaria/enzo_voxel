@@ -21,6 +21,7 @@ import { createMuseumRoom } from './museum-room.ts'
 const worldLog = log.child('world')
 const footLog = log.child('foot')
 const devLog = log.child('dev')
+const floatLog = log.child('float')
 const boatLog = log.child('boat')
 
 
@@ -538,6 +539,8 @@ const YACHT_COL = [
   [92, 96, 104], [152, 154, 152], [206, 196, 172], [206, 150, 100],
   // the museum: cream stucco, the darker joints of its rusticated ground floor, the sculpted frieze, its red banners
   [240, 228, 200], [206, 190, 158], [218, 188, 136], [172, 44, 50],
+  // the woman on the floating dock: her coral sundress, her dark hair
+  [222, 86, 76], [70, 42, 30],
   // lamps: the glass of an unlit lantern; then a lit lantern, the same in every shade and kept from
   // the night's grading. Lamps stay last: k >= YM_LAMP is what makes a material a lamp.
   [196, 206, 200], [255, 208, 128],
@@ -574,8 +577,10 @@ const YM_CREAM = 50
 const YM_JOINT = 51
 const YM_RELIEF = 52
 const YM_BANNER = 53
-const YM_GLASS = 54
-const YM_LAMP = 55
+const YM_DRESS = 54
+const YM_LOCKS = 55
+const YM_GLASS = 56
+const YM_LAMP = 57
 const YM_WINDOW = 8 // a boat's deckhouse windows and its open hatch: lit from inside at night
 // the glow round each kind of lamp (packed like the frame: 0xAABBGGRR)
 const LAMP_WARM_GLOW = 0xff3c96ff // 255, 150, 60
@@ -792,7 +797,26 @@ const BENCH_BACK = 1.6 // getting up plays this much faster
 // under the hip) and the thighs are BENCH_HIP from straight down, so the feet, shins upright, reach the ground
 const BENCH_SEAT = 1.45
 const BENCH_HIP = 1.1
-const PERSON = (() => {
+// Floating docks (placeFloats): FLOAT_N plank pontoons moored where the sea is wide, with open water at
+// least FLOAT_OPEN from them to any land every way, and land no more than FLOAT_FAR away, so they lie off
+// a coast and not lost in mid-ocean. The first has a sloop alongside and a woman sat on its far edge.
+const FLOAT_N = 2
+const FLOAT_OPEN = 40
+const FLOAT_FAR = 60
+const FLOAT_APART = 300 // between them, at least
+const FLOAT_LEN = 12 // cells along
+const FLOAT_HW = 2.5 // half its width across (5 cells)
+const FLOAT_BERTH = 4.3 // from its middle line to the moored sloop's: half its width, half the beam, a gap
+const FLOAT_DECK = 1 // its height over the water, as a pier's
+// the woman sits at Enzo's size on deck, so she and the boat beside her look alike in scale
+const SITTER_SCALE = LOUNGE_SCALE
+const SITTER_HIP = 1.38 // her thighs, nearly level on the planks
+/**
+ * a figure on the man's frame (PERSON_HIP, PERSON_KNEE, PERSON_SHOULDER), as surface voxels of PERSON_G.
+ * build(box, one) lays it out: box(a0, a1, f0, f1, z0, z1, part, col, hint, skip) adds a box, and one(m)
+ * colours a whole box with material m.
+ */
+function figureModel(build) {
   const g = PERSON_G
   const A = [], F = [], Z = [], NA = [], NF = [], NZ = [], K = [], P = []
   // a box, surface voxels only. col(i, j, k) picks the material (i across, j forward, k up).
@@ -819,6 +843,16 @@ const PERSON = (() => {
     }
   }
   const one = (m) => () => m
+  build(box, one)
+  return {
+    n: A.length,
+    A: Float32Array.from(A), F: Float32Array.from(F), Z: Float32Array.from(Z),
+    NA: Float32Array.from(NA), NF: Float32Array.from(NF), NZ: Float32Array.from(NZ),
+    K: Uint8Array.from(K), P: Uint8Array.from(P),
+  }
+}
+const PERSON = figureModel((box, one) => {
+  const g = PERSON_G
   // the shirt: navy stripes on white, every other row, plain at the shoulders
   const stripes = (z0) => (i, j, k) => {
     const row = Math.round((z0 + k * g - 2) / g)
@@ -848,13 +882,42 @@ const PERSON = (() => {
   box(-0.625, 0.625, -0.625, 0.625, 4.75, 5, 0, one(YM_STRAW), [0, 0, 1],
     (i, j, k, na, nf) => (i === 0 || i === na - 1) && (j === 0 || j === nf - 1))
   box(-0.375, 0.375, -0.375, 0.375, 5, 5.5, 0, (i, j, k) => (k === 0 ? YM_BAND : YM_STRAW))
-  return {
-    n: A.length,
-    A: Float32Array.from(A), F: Float32Array.from(F), Z: Float32Array.from(Z),
-    NA: Float32Array.from(NA), NF: Float32Array.from(NF), NZ: Float32Array.from(NZ),
-    K: Uint8Array.from(K), P: Uint8Array.from(P),
+})
+
+// The woman on the floating dock, on the man's frame so she poses the same way (posePerson): a coral
+// sundress to the knee with a white sash, its straps over bare shoulders, bare arms and slim bare shins,
+// sandals, long dark hair down her back and a wide white sun hat with a coral ribbon. The skirt is on the
+// thighs, so sat it lies over her lap.
+const WOMAN = figureModel((box, one) => {
+  for (const [s, part] of [[-1, 1], [1, 2]]) {
+    const a0 = s < 0 ? -0.5 : 0
+    const c0 = s < 0 ? -0.375 : 0.125 // the shin, in the middle of the thigh
+    box(c0, c0 + 0.25, -0.25, 0.5, 0, 0.25, part, one(YM_SHOE), [s, 0, 0]) // sandal, the toe forward
+    box(c0, c0 + 0.25, -0.25, 0.25, 0.25, 1, part, one(YM_SKIN), [s, 0, 0]) // shin
+    box(a0, a0 + 0.5, -0.25, 0.25, 1, 2, part, one(YM_DRESS)) // thigh, under the skirt
   }
-})()
+  // the bodice, a white sash at the waist; at the top her shoulders, bare but for the straps at the sides
+  box(-0.5, 0.5, -0.375, 0.375, 2, 3.75, 0, (i, j, k, na, nf, nz) => {
+    if (k === nz - 1) return i === 0 || i === na - 1 ? YM_DRESS : YM_SKIN
+    return k === 1 ? YM_SHIRT : YM_DRESS
+  })
+  for (const [s, part] of [[-1, 3], [1, 4]]) {
+    const a0 = s < 0 ? -0.75 : 0.5
+    box(a0, a0 + 0.25, -0.25, 0.25, 1.75, 3.75, part, one(YM_SKIN), [s, 0, 0]) // arm and hand
+  }
+  box(-0.125, 0.125, -0.125, 0.125, 3.75, 4, 0, one(YM_SKIN)) // neck
+  // the head: hair at the back, the sides and the top, eyes on the face
+  box(-0.375, 0.375, -0.375, 0.375, 4, 4.75, 0, (i, j, k, na, nf) => {
+    if (j === nf - 1) return k === 1 && i !== 1 ? YM_BAND : YM_SKIN
+    if (j === 0 || k === 2 || i === 0 || i === na - 1) return YM_LOCKS
+    return YM_SKIN
+  })
+  box(-0.375, 0.375, -0.625, -0.375, 3.25, 4.5, 0, one(YM_LOCKS), [0, -1, 0]) // long hair down her back
+  // the sun hat: a round brim, wider than the man's, and a low crown with a ribbon
+  box(-0.875, 0.875, -0.875, 0.875, 4.75, 5, 0, one(YM_SHIRT), [0, 0, 1],
+    (i, j, k, na, nf) => (i - (na - 1) / 2) ** 2 + (j - (nf - 1) / 2) ** 2 > 10)
+  box(-0.375, 0.375, -0.375, 0.375, 5, 5.5, 0, (i, j, k) => (k === 0 ? YM_DRESS : YM_SHIRT))
+})
 
 // Garden props, drawn like the boats: surface voxels of PROP_G with normals. Kinds:
 // 0, 1 marble statues in a long robe, 3 to 3.4 tall, so on a plinth one high the head stays under a
@@ -1917,6 +1980,7 @@ export function createScene(initial) {
       islands: bigIsle.length,
       specks: speckN,
       docks: docks.length,
+      floats: floats.length,
       boats: boats.length,
       fish: fish.length,
       whales: whales.length,
@@ -2560,6 +2624,119 @@ export function createScene(initial) {
         for (const s of shores) stamp(s.x, s.y, s.dx, s.dy)
       }
     }
+    placeFloats(sea, stack)
+  }
+
+  // the floating docks, their middles, and who sits on them: where her knees come to the edge, the way she faces
+  const floats = []
+  const sitters = []
+  /**
+   * FLOAT_N pontoons on the ocean (sea), where it is open FLOAT_OPEN round them and land is within
+   * FLOAT_FAR: the nearest such water to the start first, the next at least FLOAT_APART from it. Each lies
+   * along the coast it is off, square to the map so its planks are whole cells. The first has a sloop
+   * moored on its landward side, bow to the wind, at a berth as a pier's (a new one comes back once it is
+   * taken), and the woman sat on its seaward edge. The planks are dock wood stamped into the map at
+   * FLOAT_DECK, marked as a speck so the person is never set down on one from the plane. q is scratch, N·N long.
+   */
+  function placeFloats(sea, q) {
+    floats.length = 0
+    sitters.length = 0
+    // how far each ocean cell is from anything else, in king's moves (never more than the true distance),
+    // out to FLOAT_FAR; 255 further than that
+    const far = new Uint8Array(N * N)
+    let head = 0
+    let tail = 0
+    for (let o = 0; o < N * N; o++) {
+      if (sea[o]) far[o] = 255
+      else q[tail++] = o
+    }
+    while (head < tail) {
+      const o = q[head++]
+      const d = far[o]
+      if (d >= FLOAT_FAR) continue
+      const cx = o & NM
+      const cy = o >> NSHIFT
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const no = (((cy + dy) & NM) << NSHIFT) | ((cx + dx) & NM)
+          if (far[no] !== 255) continue
+          far[no] = d + 1
+          q[tail++] = no
+        }
+      }
+    }
+    const cands = []
+    for (let y = 0; y < N; y += 4) {
+      for (let x = 0; x < N; x += 4) {
+        const d = far[(y << NSHIFT) | x]
+        if (d < FLOAT_OPEN || d === 255) continue
+        cands.push({ x, y, d: wrapDelta(x, spawnX) ** 2 + wrapDelta(y, spawnY) ** 2 })
+      }
+    }
+    cands.sort((a, b) => a.d - b.d)
+    const near = (list, x, y, r) => list.some((o) => wrapDelta(o.x ?? o.bx, x) ** 2 + wrapDelta(o.y ?? o.by, y) ** 2 < r * r)
+    for (const c of cands) {
+      if (floats.length >= FLOAT_N) break
+      if (near(floats, c.x, c.y, FLOAT_APART) || near(docks, c.x, c.y, 60)) continue
+      stampFloat(sea, c.x, c.y, floats.length === 0)
+    }
+  }
+  function stampFloat(sea, cx, cy, first) {
+    // which way the land is: the directions to the first land past the open water, added up
+    let lx = 0
+    let ly = 0
+    for (let a = 0; a < 16; a++) {
+      const sx = Math.cos(a * (Math.PI / 8))
+      const sy = Math.sin(a * (Math.PI / 8))
+      for (let r = FLOAT_OPEN; r <= FLOAT_FAR + 24; r += 4) {
+        if (sea[(((cy + Math.round(sy * r)) & NM) << NSHIFT) | ((cx + Math.round(sx * r)) & NM)]) continue
+        lx += sx
+        ly += sy
+        break
+      }
+    }
+    // across it (v) points to the land, so it lies along the coast
+    const ew = Math.abs(lx) >= Math.abs(ly)
+    const vx = ew ? (lx < 0 ? -1 : 1) : 0
+    const vy = ew ? 0 : ly < 0 ? -1 : 1
+    const ux = -vy
+    const uy = vx
+    // its cells: FLOAT_LEN along from cx − FLOAT_LEN/2, five across from the middle row; mx, my its middle
+    const ax = Math.abs(ux)
+    const ay = Math.abs(uy)
+    const bx = Math.abs(vx)
+    const by = Math.abs(vy)
+    const mx = cx + 0.5 * bx
+    const my = cy + 0.5 * by
+    const half = FLOAT_LEN / 2
+    const side = FLOAT_HW - 0.5
+    for (let k = -half; k < half; k++) {
+      for (let j = -side; j <= side; j++) {
+        const o = (((cy + ay * k + by * j) & NM) << NSHIFT) | ((cx + ax * k + bx * j) & NM)
+        matMap[o] = k & 1 ? 26 : 25 // planks across it, light and dark in turn
+        heightMap[o] = FLOAT_DECK
+        floorMap[o] = FLOAT_DECK
+        smallIsle[o] = 1
+      }
+    }
+    floats.push({ x: wrapPos(mx), y: wrapPos(my) })
+    floatLog.info('floating dock', { x: mx | 0, y: my | 0, along: ew ? 'y' : 'x', boat: first })
+    if (!first) return
+    // the sloop alongside on the landward side, bow to the wind as a boat on a mooring lies
+    const yawA = Math.atan2(ux, -uy)
+    const yaw = windAlong(yawA) <= windAlong(yawA + Math.PI) ? yawA : wrapAngle(yawA + Math.PI)
+    const sx = wrapPos(mx + vx * FLOAT_BERTH)
+    const sy = wrapPos(my + vy * FLOAT_BERTH)
+    boats.push(makeBoat(sx, sy, yaw, 0, HULL_PICK[(boats.length * 7 + 3) % HULL_PICK.length], true, 7, boats.length * 0.7))
+    docks.push({ bx: sx, by: sy, yaw, float: true })
+    // the woman on the seaward edge, a little along from the middle, facing out to sea
+    sitters.push({
+      x: wrapPos(mx - vx * FLOAT_HW + ux * 2.5),
+      y: wrapPos(my - vy * FLOAT_HW + uy * 2.5),
+      z: FLOAT_DECK,
+      yaw: Math.atan2(-vx, vy),
+      ph: (cx * 0.37 + cy * 0.11) % (Math.PI * 2),
+    })
   }
 
   // Lakeside belvederes: by some of the houses near the water, a paved terrace at the shore with a
@@ -4397,6 +4574,7 @@ export function createScene(initial) {
     if (spot) how = 'nearby'
     let best = spot ? 480 * 480 : Infinity
     for (const dock of docks) {
+      if (dock.float) continue // a floating dock's berth is out at sea, far from a shore
       const dx = wrapDelta(dock.bx, lead.x)
       const dy = wrapDelta(dock.by, lead.y)
       const d = dx * dx + dy * dy
@@ -7222,7 +7400,7 @@ export function createScene(initial) {
       arm2 = 0.35 * ease(k) // the other on his knee
     }
     const P = PERSON
-    posePerson(hip1, hip2, knee1, knee2, arm1, arm2, lean)
+    posePerson(P, hip1, hip2, knee1, knee2, arm1, arm2, lean)
     const cp = Math.cos(psi)
     const sp = Math.sin(psi)
     const x0 = side * at
@@ -7251,12 +7429,11 @@ export function createScene(initial) {
   const poseNF = new Float32Array(RIG_MAX)
   const poseNZ = new Float32Array(RIG_MAX)
   /**
-   * the man in a pose: each thigh turned forward about the hip by hip1/hip2, each shin back from it by
-   * knee1/knee2 below the knee, each arm forward about the shoulder by arm1/arm2, and the body and arms
-   * leaning back about the hip by lean, all in radians
+   * a figure on the man's frame (PERSON or WOMAN) in a pose: each thigh turned forward about the hip by
+   * hip1/hip2, each shin back from it by knee1/knee2 below the knee, each arm forward about the shoulder by
+   * arm1/arm2, and the body and arms leaning back about the hip by lean, all in radians
    */
-  function posePerson(hip1, hip2, knee1, knee2, arm1, arm2, lean) {
-    const P = PERSON
+  function posePerson(P, hip1, hip2, knee1, knee2, arm1, arm2, lean) {
     const cl = Math.cos(lean)
     const sl = Math.sin(lean)
     for (let v = 0; v < P.n; v++) {
@@ -7481,6 +7658,46 @@ export function createScene(initial) {
     }
   }
 
+  /**
+   * the woman on the floating dock, sat on its edge at SITTER_SCALE: her thighs on the planks, her knees
+   * just past the edge, leaning back on her hands, her shins hanging over the water and swinging, one then
+   * the other
+   */
+  function drawSitters() {
+    if (sitters.length === 0) return
+    ensureAkey()
+    const P = WOMAN
+    const sc = SITTER_SCALE
+    const hip = SITTER_HIP
+    const thigh = PERSON_HIP - PERSON_KNEE
+    for (const s of sitters) {
+      let x = s.x - N * Math.round((s.x - cam.x) / N)
+      let y = s.y - N * Math.round((s.y - cam.y) / N)
+      if ((x - cam.x) ** 2 + (y - cam.y) ** 2 > 600 * 600 || !project(x, y, s.z + 1)) continue
+      const reach = prM * 3 + 2
+      if (prX < -reach || prX > W + reach || prY < -reach || prY > H + reach) continue
+      const sway = 0.24 * Math.sin(time * 1.5 + s.ph)
+      posePerson(P, hip, hip, hip - sway, hip + sway * 0.8, -0.3, -0.36, 0.18)
+      // her feet's place, back from the edge so the knees come 0.3 past it and the shins hang clear of it
+      const back = sc * (Math.sin(hip) * thigh - 0.3)
+      x -= Math.sin(s.yaw) * back
+      y += Math.cos(s.yaw) * back
+      for (let v = 0; v < P.n; v++) {
+        rigA[v] = P.A[v] * sc
+        rigF[v] = poseF[v] * sc
+        rigZ[v] = poseZ[v] * sc
+        rigNA[v] = P.NA[v]
+        rigNF[v] = poseNF[v]
+        rigNZ[v] = poseNZ[v]
+        rigK[v] = P.K[v]
+      }
+      // the underside of her thighs, 0.25 under the hip, on the planks
+      voxBegin(x, y, s.z + (0.25 - PERSON_HIP) * sc, s.yaw, 0, 0, PERSON_G * sc)
+      rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, P.n)
+      voxEnd()
+    }
+  }
+
   // the gulls: each frame works out where each one is on its circle, which way it heads, and how its
   // wings beat. They glide with the wings a little raised and flap now and then.
   function drawBirds() {
@@ -7548,7 +7765,7 @@ export function createScene(initial) {
       const x = q.x - N * Math.round((q.x - cam.x) / N)
       const y = q.y - N * Math.round((q.y - cam.y) / N)
       walkerShadow(x, y, q.floor)
-      posePerson(q.hip1, q.hip2, q.knee1, q.knee2, q.arm1, q.arm2, q.lean)
+      posePerson(P, q.hip1, q.hip2, q.knee1, q.knee2, q.arm1, q.arm2, q.lean)
       for (let v = 0; v < P.n; v++) {
         rigA[v] = P.A[v]
         rigF[v] = poseF[v]
@@ -8063,6 +8280,7 @@ export function createScene(initial) {
     drawBombs()
     drawSeaLife()
     drawGardens()
+    drawSitters()
     drawBoats()
     drawBirds()
     drawWalker()
