@@ -101,7 +101,7 @@ Click (pointer down and up in under 0.2s) barrel-rolls the plane. Holding the po
 - W A S D move it across the screen (up, left, down, right), at `DEV_PAN` (0.45) of the frame's width a second at any zoom; Shift moves it `DEV_FAST` (3) times as fast. ← → turn it (`DEV_TURN`, 1.5 radians a second; → turns the camera right). ↑ ↓ tilt it, between `DEV_TILT_MIN` (0.3, low over the land) and `DEV_TILT_MAX` (1, straight down as from the plane overhead). The wheel zooms, about the middle of the screen, from `DEV_ZOOM_MIN` (1) to `DEV_ZOOM_MAX` (32), and does not scroll the page. The height it is centred on (`dev.alt`) follows the ground under the middle of the screen (`devGround`), so a hill does not slide off the screen.
 - N switches day and night as in the game. C shows the clouds or takes them away (`toggleDevClouds`): they are off at first, and stay as last left the next time it starts. V, E, Space and clicks do nothing, so no hand is on the player.
 - Flowers bloom from zoom 4 in. Enzo is drawn even if he was left in first person, and the museum's gallery is not drawn: the map is.
-- While it is on, `step` moves the camera (`stepDev`) and the game goes on under it with no hand on the player: the plane flies straight on at its cruising height (its turn eases out, as when the keys are let go), the man stands still, a boat under sail sails on. Leaving it goes back to the player wherever they are now, in the view they were in.
+- While it is on, `step` moves the camera (`stepDev`) and the game goes on under it with no hand on the player: the plane flies straight on at its cruising height (its turn eases out, as when the keys are let go), the man stands still or stays on his bench, Enzo stays out on deck, a boat under sail sails on. Leaving it goes back to the player wherever they are now, in the view they were in.
 - `scene.toggleDev()`, `setDev(mx, my, turn, lift, fast)`, `devWheel(dy)` and `toggleDevClouds()` are its API; `scene.devView` and `scene.devClouds` say whether it is on and shows the clouds. `applyDevCamera` sets the camera in `updateView`, ahead of every other view.
 
 ## Controls
@@ -110,7 +110,7 @@ Click (pointer down and up in under 0.2s) barrel-rolls the plane. Holding the po
 
 | Key | Flying | On foot, walking | On foot, in a boat |
 | --- | --- | --- | --- |
-| W / Up | Dive | Walk forward | Start sailing. Stays on after release. If Enzo is out on deck, he climbs back in first. |
+| W / Up | Dive | Walk forward. If he is on a bench, he gets up first. | Start sailing. Stays on after release. If Enzo is out on deck, he climbs back in first. |
 | S / Down | Climb | Walk back | Stop. Stays stopped. |
 | A, D | Turn | Step left, step right (sideways, no turn) | Turn, sailing or not. If Enzo is out on deck, he climbs back in first. |
 | Left, Right | Turn | Turn | Turn, as A and D |
@@ -362,6 +362,14 @@ Cameras while walking (`footView` 0 overhead, 1 first):
 
 Both use `vYaw = -walker.yaw`, so forward is up the screen in the overhead view and into the picture in first person.
 
+**Sitting on a bench.** After `BENCH_WAIT` (15) seconds standing still in the overhead view with no key down (`benchRest`), if a bench is within `BENCH_REACH` (4), the man walks over and sits on it, the same as Enzo coming out on deck. `benchStep` runs it (from `stepFoot`, before he walks) and `drawWalker` draws it.
+
+- **Which bench.** `seatNear` takes the nearest live bench (`P_BENCH`) within reach whose front he can stand on. The point is `BENCH_FRONT` (1) in front of the seat, `standable`, and within 1 of the bench's height. He sits at the place along the seat nearest him, up to 0.7 either side of its middle. If there is no such bench, the count starts again.
+- **Timeline.** `benchT` runs from 0 to `benchLen()`. First the stroll to the front of the seat, at `BENCH_STROLL` (6) a second, turning his way as he sets off, legs and arms swinging. A spot within 0.3 skips it. Then `BENCH_TURN` (0.5 s) to turn his back to it, and `BENCH_SIT` (0.9 s) down onto it. The hips go back over the seat and drop, to `BENCH_SEAT` (1.45) above the bench's foot. The thighs come up ahead of the drop to `BENCH_HIP` (1.1 rad) and the shins stay upright. The hands come to rest on his thighs, and he leans back a little. `benchDir` is 1 going and -1 getting up.
+- **Getting up.** Any walking key (or a finger on the stick) gets him up. That plays the same timeline back, `BENCH_BACK` (1.6×) faster, from turning to face the bench to back on his feet at its front, turned the way he was facing. The keys then walk him from there. On the way over, a key just stops him where he is. `walker.yaw` never changes, so the camera behind him stays put while only his pose turns.
+- **The pose.** `benchPose` fills `seatPose` (where, how high, which way, and the hip, knee, arm and lean angles). `posePerson` bends `PERSON` with them into `poseF`, `poseZ`, `poseNF` and `poseNZ`; `drawEnzoOut` uses the same helper at boat scale.
+- **What ends it.** First person, V, E, the museum door and a world rebuild call `benchEnd`. The developer view does not: he stays on the bench, as Enzo stays out on deck, and the count can run out while it is on.
+
 ## Docks
 
 After houses, `placeDocks` runs.
@@ -521,7 +529,7 @@ The world line lists islands, specks, docks, boats, fish, whales, gardens, viewp
 - Dock normals have to come from the ocean mask. A cardinal step looks diagonal to a diagonal beach, and a lake will accept a “deep water” test that only looks a few cells out.
 - Overhead cameras with `vC` or `vK` above 0 draw the sky volume. The walking camera must stay under `CLOUD_ALT` or the view fills with cloud. The boat aerial view stays orthographic (`vQ`, `vC`, and `vK` all 0) so it does not enter that volume. Its look-down is only `vTan`, and only the cloud hole keeps clouds off the boat. The walking view overhead opens a hole around the man the same way (`f.holeR` in `worldFrame`, used by the CPU and the GPU).
 - A moored boat must be skipped in `stepBoats`. Clearing `moored` on W is what casts off (`castOff`). S stops by clearing `sailing` only.
-- Enzo out on deck is drawn from the rig buffers after the rig has been rasterized, so `drawEnzoOut` must come after the rig's `rasterVox` in `drawYacht`. Anything new that resets or leaves the boat you are in should call `loungeReset`, or he can come back sitting on a different boat. A new yacht needs a `seat` clear of its shrouds and booms, on a part of the deck wide enough for the walk out (`yachtHalf` there minus 0.5).
+- Enzo out on deck is drawn from the rig buffers after the rig has been rasterized, so `drawEnzoOut` must come after the rig's `rasterVox` in `drawYacht`. Anything new that resets or leaves the boat you are in should call `loungeReset`, or he can come back sitting on a different boat. Likewise anything new that takes the man off his feet on land, or moves him, should call `benchEnd`, or he can come back sitting on a bench far away. A new yacht needs a `seat` clear of its shrouds and booms, on a part of the deck wide enough for the walk out (`yachtHalf` there minus 0.5).
 - World rebuild resets `aboard` inside `placeDocks` and reseats the walker if they were on foot. The reseat also skips specks.
 - New wall or roof materials have to be added to `isBuilt`, and a house's walls and roofs to `FACADE`. Otherwise the person walks on roofs, bombs leave walls standing, or the facade does not show.
 - `facadeAt` in `scene.ts` and in the shader, and the walk back to where a ray came into a house, must stay the same in both renderers. `enzoScene.compareGround()` counts the pixels where they differ.

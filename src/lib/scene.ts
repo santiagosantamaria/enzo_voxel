@@ -778,6 +778,20 @@ const LOUNGE_WALK = 0.8 // out to the rail
 const LOUNGE_SIT = 0.9 // down onto it, legs over the side
 const LOUNGE_END = LOUNGE_RISE + LOUNGE_WALK + LOUNGE_SIT
 const LOUNGE_BACK = 1.6 // going back in plays this much faster
+// On a bench: after BENCH_WAIT seconds standing still in the overhead view with no key down and a bench
+// within BENCH_REACH, the man strolls to the front of its seat, turns his back to it and sits down. A key
+// gets him up again, and he turns back the way he was facing.
+const BENCH_WAIT = 15
+const BENCH_REACH = 4 // from him to the middle of the bench
+const BENCH_STROLL = 6 // units a second, to the front of the seat
+const BENCH_FRONT = 1 // how far in front of the seat he stands before he sits
+const BENCH_TURN = 0.5 // turning his back to it
+const BENCH_SIT = 0.9 // down onto the seat
+const BENCH_BACK = 1.6 // getting up plays this much faster
+// sat, the hip is BENCH_SEAT over the ground (the bench's seat is 1.2 high, the thigh's underside 0.25
+// under the hip) and the thighs are BENCH_HIP from straight down, so the feet, shins upright, reach the ground
+const BENCH_SEAT = 1.45
+const BENCH_HIP = 1.1
 const PERSON = (() => {
   const g = PERSON_G
   const A = [], F = [], Z = [], NA = [], NF = [], NZ = [], K = [], P = []
@@ -2363,6 +2377,7 @@ export function createScene(initial) {
     speckN = 0
     aboard = -1
     loungeReset()
+    benchEnd()
     smallIsle.fill(0)
     windYaw = ((p.seed * 2.399) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)
     const sea = new Uint8Array(N * N)
@@ -3820,6 +3835,17 @@ export function createScene(initial) {
   let loungeDir = 0
   let loungeSide = 1
   let loungeGo = false
+  // the man on a bench: seconds stood still, how far along the way he is (0 … benchLen()), which way
+  // (1 sitting down, -1 getting up, 0 not on a bench), and the way: where he set off from, the front of the
+  // seat (and its floor), the seat, the bench's floor and heading, how long the stroll takes, its heading,
+  // and the heading the turn starts from
+  let benchRest = 0
+  let benchT = 0
+  let benchDir = 0
+  const sit = { x0: 0, y0: 0, hx: 0, hy: 0, hz: 0, sx: 0, sy: 0, z: 0, yaw: 0, go: 0, travel: 0, turn0: 0 }
+  // his pose this frame: where he is and how high his feet are, his heading, the thighs, knees and arms
+  // swung forward, and his lean back
+  const seatPose = { x: 0, y: 0, base: 0, floor: 0, yaw: 0, hip1: 0, hip2: 0, knee1: 0, knee2: 0, arm1: 0, arm2: 0, lean: 0 }
   let bombHeld = false
   let bombReady = 0
   const boom = new Float32Array(BOOM_N * BOOM_F)
@@ -4358,6 +4384,7 @@ export function createScene(initial) {
       walkSide = 0
       sailing = false
       loungeReset()
+      benchEnd()
       footLog.info('back to the jet')
       return false
     }
@@ -4556,6 +4583,7 @@ export function createScene(initial) {
     aboard = best
     sailing = false
     loungeReset()
+    benchEnd()
     boats[best].moored = true
     boatLog.info('boarded', { boat: best, moored: true })
     walker.x = boats[best].x
@@ -4627,6 +4655,133 @@ export function createScene(initial) {
     if (go) castOff(b)
     return false
   }
+  function benchEnd() {
+    benchRest = 0
+    benchT = 0
+    benchDir = 0
+  }
+  const benchLen = () => sit.go + BENCH_TURN + BENCH_SIT
+  /**
+   * the nearest bench within BENCH_REACH whose front he can stand on, about level with it: the way to it
+   * goes into sit, the seat at the place along it nearest him. False if there is none.
+   */
+  function seatNear() {
+    let bestD = BENCH_REACH * BENCH_REACH
+    let found = false
+    for (const p of props) {
+      if (p.kind !== P_BENCH || !p.alive) continue
+      const dx = wrapDelta(p.x, walker.x)
+      const dy = wrapDelta(p.y, walker.y)
+      const d = dx * dx + dy * dy
+      if (d >= bestD) continue
+      // across the bench is (cos, sin) of its yaw, the way the sitter faces (sin, −cos)
+      const cs = Math.cos(p.yaw)
+      const sn = Math.sin(p.yaw)
+      const bx = walker.x + dx
+      const by = walker.y + dy
+      const off = clamp(-dx * cs - dy * sn, -0.7, 0.7)
+      const sx = bx + cs * off
+      const sy = by + sn * off
+      const hx = sx + sn * BENCH_FRONT
+      const hy = sy - cs * BENCH_FRONT
+      if (!standable(Math.floor(hx), Math.floor(hy)) || Math.abs(walkFloor(hx, hy) - p.z) > 1) continue
+      bestD = d
+      found = true
+      Object.assign(sit, { sx, sy, hx, hy, hz: walkFloor(hx, hy), z: p.z, yaw: p.yaw })
+    }
+    if (!found) return false
+    sit.x0 = walker.x
+    sit.y0 = walker.y
+    const dist = Math.hypot(sit.hx - sit.x0, sit.hy - sit.y0)
+    sit.go = dist > 0.3 ? dist / BENCH_STROLL : 0
+    sit.travel = sit.go > 0 ? Math.atan2(sit.hx - sit.x0, -(sit.hy - sit.y0)) : walker.yaw
+    sit.turn0 = sit.travel
+    return true
+  }
+  /** where he is and how he stands or sits, benchT along the way to the seat, into seatPose */
+  function benchPose() {
+    const q = seatPose
+    const s = sit
+    const t = benchT
+    const ease = (u) => u * u * (3 - 2 * u)
+    q.hip1 = q.hip2 = q.knee1 = q.knee2 = q.arm1 = q.arm2 = q.lean = 0
+    q.yaw = s.yaw
+    if (t < s.go) {
+      // the stroll to the front of the seat, turning to it as he sets off, his legs and arms swinging
+      const u = t / s.go
+      q.x = s.x0 + (s.hx - s.x0) * u
+      q.y = s.y0 + (s.hy - s.y0) * u
+      q.floor = q.base = walkFloor(q.x, q.y)
+      q.yaw = walker.yaw + wrapAngle(s.travel - walker.yaw) * clamp(t / 0.25, 0, 1)
+      const stride = Math.sin(time * 9)
+      q.hip1 = 0.5 * stride
+      q.hip2 = -q.hip1
+      q.arm1 = -0.42 * stride
+      q.arm2 = -q.arm1
+    } else if (t < s.go + BENCH_TURN) {
+      // his back to the seat (getting up, back the way he was facing)
+      q.x = s.hx
+      q.y = s.hy
+      q.floor = q.base = s.hz
+      q.yaw = s.turn0 + wrapAngle(s.yaw - s.turn0) * ease((t - s.go) / BENCH_TURN)
+    } else {
+      // down onto the seat: the hips go back over it and down, the thighs come up ahead of the drop, the
+      // shins stay upright, the hands come to rest on the thighs and he leans back a little
+      const k = clamp((t - s.go - BENCH_TURN) / BENCH_SIT, 0, 1)
+      const e = ease(k)
+      q.x = s.hx + (s.sx - s.hx) * e
+      q.y = s.hy + (s.sy - s.hy) * e
+      q.floor = s.hz + (s.z - s.hz) * e
+      q.base = s.hz + (s.z + BENCH_SEAT - PERSON_HIP - s.hz) * e ** 1.6
+      q.hip1 = q.hip2 = q.knee1 = q.knee2 = BENCH_HIP * ease(Math.min(1, k * 1.3))
+      q.arm1 = q.arm2 = 0.45 * e
+      q.lean = 0.06 * e
+    }
+    return q
+  }
+  /**
+   * the man and a bench. After BENCH_WAIT seconds standing still in the overhead view with no key down,
+   * near a bench, he goes and sits on it. A key gets him up (on the way there, he just stops), and once
+   * he is up and turned back the way he was facing, the keys walk him again. His heading (walker.yaw, and
+   * the camera with it) does not change: only his pose turns. Returns true while he is on the way, sat or
+   * getting up, when he does not walk.
+   */
+  function benchStep(dt) {
+    if (benchDir === 0) {
+      const still = footView === 0 && walkMove === 0 && walkTurn === 0 && walkSide === 0 && !aimOn
+      benchRest = still ? benchRest + dt : 0
+      if (benchRest < BENCH_WAIT) return false
+      benchRest = 0
+      if (!seatNear()) return false
+      benchDir = 1
+      benchT = 0
+      footLog.info('sits on a bench', { x: sit.sx | 0, y: sit.sy | 0 })
+    }
+    const up = walkMove !== 0 || walkTurn !== 0 || walkSide !== 0 || aimOn
+    // in first person the eye is his, on his feet; on the way there a key stops him where he is
+    if (footView !== 0 || (up && benchT < sit.go)) {
+      benchEnd()
+      return false
+    }
+    if (benchDir > 0 && up) {
+      benchDir = -1
+      sit.turn0 = walker.yaw
+      footLog.info('gets up from the bench')
+    }
+    benchT = Math.min(benchLen(), benchT + benchDir * dt * (benchDir < 0 ? BENCH_BACK : 1))
+    if (benchDir < 0 && benchT <= sit.go) {
+      walker.x = wrapPos(sit.hx)
+      walker.y = wrapPos(sit.hy)
+      walker.z = walkFloor(walker.x, walker.y)
+      benchEnd()
+      return false
+    }
+    const q = benchPose()
+    walker.x = wrapPos(q.x)
+    walker.y = wrapPos(q.y)
+    walker.z = q.floor
+    return true
+  }
   function stepFoot(dt) {
     if (!onFoot) return
     if (indoors) {
@@ -4668,6 +4823,7 @@ export function createScene(initial) {
       rigGhost += (ghostGoal - rigGhost) * (1 - Math.exp(-dt * 1.6))
       return
     }
+    if (benchStep(dt)) return
     walker.yaw += walkTurn * 2.1 * dt
     if (walkMove !== 0 || walkSide !== 0) {
       // forward is (sin, −cos) and right is (cos, sin); a diagonal is no faster than a straight walk
@@ -4704,6 +4860,7 @@ export function createScene(initial) {
   }
   function enterMuseum() {
     indoors = true
+    benchEnd()
     room.enter()
     footLog.info('into the museum')
   }
@@ -7065,12 +7222,43 @@ export function createScene(initial) {
       arm2 = 0.35 * ease(k) // the other on his knee
     }
     const P = PERSON
+    posePerson(hip1, hip2, knee1, knee2, arm1, arm2, lean)
     const cp = Math.cos(psi)
     const sp = Math.sin(psi)
-    const cl = Math.cos(lean)
-    const sl = Math.sin(lean)
     const x0 = side * at
     let n = 0
+    for (let v = 0; v < P.n; v++) {
+      const f = poseF[v]
+      const bz = base + poseZ[v] * sc
+      if (bz < clipZ) continue
+      const a = P.A[v]
+      rigA[n] = x0 + sc * (f * cp + a * sp)
+      rigF[n] = fs + sc * (f * sp - a * cp)
+      rigZ[n] = bz
+      rigNA[n] = poseNF[v] * cp + P.NA[v] * sp
+      rigNF[n] = poseNF[v] * sp - P.NA[v] * cp
+      rigNZ[n] = poseNZ[v]
+      rigK[n] = P.K[v]
+      n++
+    }
+    voxGrain(PERSON_G * sc)
+    rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, n)
+  }
+
+  // the man's voxels posed, forward and up from his feet (across is as built): posePerson fills them
+  const poseF = new Float32Array(RIG_MAX)
+  const poseZ = new Float32Array(RIG_MAX)
+  const poseNF = new Float32Array(RIG_MAX)
+  const poseNZ = new Float32Array(RIG_MAX)
+  /**
+   * the man in a pose: each thigh turned forward about the hip by hip1/hip2, each shin back from it by
+   * knee1/knee2 below the knee, each arm forward about the shoulder by arm1/arm2, and the body and arms
+   * leaning back about the hip by lean, all in radians
+   */
+  function posePerson(hip1, hip2, knee1, knee2, arm1, arm2, lean) {
+    const P = PERSON
+    const cl = Math.cos(lean)
+    const sl = Math.sin(lean)
     for (let v = 0; v < P.n; v++) {
       const part = P.P[v]
       let f = P.F[v]
@@ -7117,20 +7305,11 @@ export function createScene(initial) {
         nz = nf * sl + nz * cl
         nf = nf1
       }
-      const bz = base + z * sc
-      if (bz < clipZ) continue
-      const a = P.A[v]
-      rigA[n] = x0 + sc * (f * cp + a * sp)
-      rigF[n] = fs + sc * (f * sp - a * cp)
-      rigZ[n] = bz
-      rigNA[n] = nf * cp + P.NA[v] * sp
-      rigNF[n] = nf * sp - P.NA[v] * cp
-      rigNZ[n] = nz
-      rigK[n] = P.K[v]
-      n++
+      poseF[v] = f
+      poseZ[v] = z
+      poseNF[v] = nf
+      poseNZ[v] = nz
     }
-    voxGrain(PERSON_G * sc)
-    rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, n)
   }
 
   /** the size each voxel splats to on screen, for voxels of size g in the object set up by voxBegin */
@@ -7362,6 +7541,28 @@ export function createScene(initial) {
   function drawWalker() {
     if (!onFoot || (footView !== 0 && !devOn) || aboard >= 0) return
     ensureAkey()
+    const P = PERSON
+    if (benchDir !== 0) {
+      // on the way to a bench, sat on it or getting up: his pose, turned his own way
+      const q = benchPose()
+      const x = q.x - N * Math.round((q.x - cam.x) / N)
+      const y = q.y - N * Math.round((q.y - cam.y) / N)
+      walkerShadow(x, y, q.floor)
+      posePerson(q.hip1, q.hip2, q.knee1, q.knee2, q.arm1, q.arm2, q.lean)
+      for (let v = 0; v < P.n; v++) {
+        rigA[v] = P.A[v]
+        rigF[v] = poseF[v]
+        rigZ[v] = poseZ[v]
+        rigNA[v] = P.NA[v]
+        rigNF[v] = poseNF[v]
+        rigNZ[v] = poseNZ[v]
+        rigK[v] = P.K[v]
+      }
+      voxBegin(x, y, q.base, q.yaw, 0, 0, PERSON_G)
+      rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, P.n)
+      voxEnd()
+      return
+    }
     const moving = walkMove !== 0 || walkSide !== 0
     const stride = moving ? Math.sin(time * 9) : 0
     // a little lift each time the legs pass
@@ -7372,7 +7573,6 @@ export function createScene(initial) {
     // legs swing about the hip, each arm against its leg
     const swing = [0, 0.5 * stride, -0.5 * stride, -0.42 * stride, 0.42 * stride]
     for (let p = 0; p < 5; p++) { swingC[p] = Math.cos(swing[p]); swingS[p] = Math.sin(swing[p]) }
-    const P = PERSON
     for (let v = 0; v < P.n; v++) {
       const part = P.P[v]
       let f = P.F[v]
