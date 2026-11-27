@@ -4532,7 +4532,8 @@ export function createScene(initial) {
           else { m = M_HEDGE; h = base + 1 }
         } else if (ring(a, f) || A <= 1 || f >= end - 2) m = (a + f) & 1 ? 4 : 5
         matMap[o] = m
-        heightMap[o] = floorMap[o] = h
+        heightMap[o] = h
+        floorMap[o] = m === M_HEDGE ? base : h // the hedge is walked through, on the lawn under it
         parkMap[o] = 3
       }
     }
