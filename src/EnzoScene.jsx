@@ -67,10 +67,10 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const [aboard, setAboard] = useState(false)
   const [footView, setFootView] = useState('above')
   const [canBoard, setCanBoard] = useState(false) // a boat in reach on foot, or a shore aboard
-  const [indoors, setIndoors] = useState(false) // walking the gallery inside the museum
+  const [indoors, setIndoors] = useState(null) // inside the museum or the church: 'museum', 'church' or null
   const [devView, setDevView] = useState(false) // the developer view's free camera
   const [devClouds, setDevClouds] = useState(false) // … and whether it shows the clouds (C)
-  const indoorsRef = useRef(false)
+  const indoorsRef = useRef(null)
   // the first time aboard, how to sail glows softly in the hint until the boat sails or is left
   const [sailCue, setSailCue] = useState(false)
   const sailCueRef = useRef(false)
@@ -215,9 +215,9 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
       last = now
       if (!scene.width) return
       scene.step(dt)
-      if (scene.indoors !== indoorsRef.current) {
-        indoorsRef.current = scene.indoors
-        setIndoors(scene.indoors)
+      if (scene.indoorsAt !== indoorsRef.current) {
+        indoorsRef.current = scene.indoorsAt
+        setIndoors(scene.indoorsAt)
       }
       if (sailCueRef.current && (scene.sailing || !scene.aboard)) {
         sailCueRef.current = false
@@ -585,7 +585,9 @@ export default function EnzoScene({ pixelSize = 0, showHint = true, touchControl
   const hints = buttons ? TOUCH_HINTS : HINTS
   const footHint = !onFoot ? null
     : indoors
-      ? (buttons ? 'Drag to walk round the gallery · Walk out by the door · Fly back to the plane' : 'W S walk · A D step aside · ← → turn · Walk out by the door · V back to the plane')
+      ? (buttons
+        ? `Drag to walk round the ${indoors === 'church' ? 'church' : 'gallery'} · Walk out by the door · Fly back to the plane`
+        : 'W S walk · A D step aside · ← → turn · Walk out by the door · V back to the plane')
     : buttons
       ? (aboard
         ? `Tap to sail or stop · Drag the way to steer · Ashore near land · View for ${footView === 'first' ? 'overhead' : 'first person'} · Fly back to the plane`

@@ -17,6 +17,7 @@ import {
 import { buildCockpit, drawCockpit } from './cockpit.ts'
 import { log } from './log.ts'
 import { createMuseumRoom } from './museum-room.ts'
+import { createChurchRoom } from './church-room.ts'
 
 const worldLog = log.child('world')
 const footLog = log.child('foot')
@@ -541,6 +542,10 @@ const YACHT_COL = [
   [240, 228, 200], [206, 190, 158], [218, 188, 136], [172, 44, 50],
   // the woman on the floating dock: her coral sundress, her dark hair
   [222, 86, 76], [70, 42, 30],
+  // the lake church: its ochre stucco, the terracotta of its roofs in two shades, the bronze of its bell
+  [226, 166, 116], [180, 86, 58], [148, 66, 46], [152, 112, 58],
+  // the lakeside fountain: its grey granite, the pale green water of its basin, the dark bronze of its figures
+  [178, 178, 172], [132, 180, 152], [98, 86, 60],
   // lamps: the glass of an unlit lantern; then a lit lantern, the same in every shade and kept from
   // the night's grading. Lamps stay last: k >= YM_LAMP is what makes a material a lamp.
   [196, 206, 200], [255, 208, 128],
@@ -579,8 +584,15 @@ const YM_RELIEF = 52
 const YM_BANNER = 53
 const YM_DRESS = 54
 const YM_LOCKS = 55
-const YM_GLASS = 56
-const YM_LAMP = 57
+const YM_PEACH = 56
+const YM_TILE = 57
+const YM_TILE2 = 58
+const YM_BRONZE = 59
+const YM_GRANITE = 60
+const YM_POND = 61
+const YM_PATINA = 62
+const YM_GLASS = 63
+const YM_LAMP = 64
 const YM_WINDOW = 8 // a boat's deckhouse windows and its open hatch: lit from inside at night
 // the glow round each kind of lamp (packed like the frame: 0xAABBGGRR)
 const LAMP_WARM_GLOW = 0xff3c96ff // 255, 150, 60
@@ -1444,12 +1456,542 @@ function muWall(b, a, A, f, z) {
   return upper ? YM_CREAM : rusticated
 }
 
-// The chapel, the temple and the museum are built the same way, at three levels of detail, far to near.
+// ── The lake church: one on the map, on the shore with its front to the water, after the parish churches of
+// Lake Como's western shore rebuilt in the Romanesque and Renaissance manner: ochre stucco dressed in cream,
+// roofs of terracotta. A front of three parts, the middle one gabled over the nave and the two lower ones
+// sloping over the aisles, cream pilaster strips between them; a band of little blind arches under the
+// cornices, a rose window, and a round-arched door under a little porch on two columns, up three steps.
+// Behind it the nave and its aisles, a transept, an octagonal drum over the crossing with a gallery of
+// little arches all round under a low roof of tiles, a presbytery and an apse. A sacristy to the left of the
+// presbytery and a tall square bell tower to its right: a cornice at each stage, a clock on every face, a
+// belfry with a bell in an arch on each side, an octagonal lantern, a little grey dome and a cross. About 16
+// across, 32 long, the drum 21 tall and the tower 33. churchAt(a, f, z) as chapelAt: across, forward (the
+// front faces +f), up. Inside it is a church of its own (church-room.ts), entered by its door.
+const CU_NAVE = 4.5 // the nave's half width …
+const CU_AISLE = 7.5 // … and the aisles', outside
+const CU_FRONT = 12 // the face of the front
+const CU_EAVE = 11 // how tall the walls are: the nave's and the transept's, …
+const CU_AEAVE = 6.4 // … the aisles', …
+const CU_PEAVE = 9 // … the presbytery's and the apse's
+const CU_PITCH = 0.55 // how fast the roofs rise
+const CU_XF = -3 // the transept from here …
+const CU_XB = -9 // … back to here
+const CU_X = -6 // the crossing's middle, under the drum
+const CU_PB = -12 // the presbytery from the transept back to here, then the apse
+const CU_APSE = 3.5 // the apse's radius, and the presbytery's half width
+const CU_BELL_A = 5.6 // the bell tower's middle, across …
+const CU_BELL_F = -11.6 // … and forward
+const CU_TOP = 33
+const CU_STEPS = 15.6 // the foot of the steps
+const CU_ROSE = 9.4 // the rose window's middle, up
+const CU_DOOR_F = 16.9 // walking up to here from the square goes up the steps and in at the door
+/** a band of little blind arches hanging from a cornice, k apart: u along it, dz down from its top; true on the stone */
+function lombard(u, dz, k) {
+  if (dz < 0.14) return true
+  const w = Math.abs(u / k - Math.floor(u / k) - 0.5) * k
+  const r = k * 0.36
+  if (w > r) return true
+  return dz < 0.14 + r - Math.sqrt(r * r - w * w)
+}
+/** a roof's tiles, in channels down its slope: s across them */
+const tileAt = (s) => (s * 4 - Math.floor(s * 4) < 0.5 ? YM_TILE : YM_TILE2)
+/** the top of the front at A across: the gable over the nave, the slopes over the aisles */
+const cuFrontTop = (A) => (A <= 4.85 ? 11.35 + (4.85 - A) * 0.62 : 8.4 - (A - 4.85) * 0.5)
+function churchAt(a, f, z) {
+  const A = Math.abs(a)
+  if (A > 8.3 || f < -16 || f > 15.8 || z > CU_TOP) return 0
+  if (a > 3.2 && f < -9.2) {
+    const k = cuTower(a - CU_BELL_A, f - CU_BELL_F, z)
+    if (k) return k
+  }
+  // the drum over the crossing, its roof and its lantern
+  if (z >= CU_EAVE && f > -11.2 && f < -0.8) {
+    octFace(a, f - CU_X)
+    if (octD <= 4.75) {
+      const k = cuDrum(a, f, z)
+      if (k >= 0) return k
+    }
+  }
+  if (f > CU_FRONT) {
+    // the steps up to the door, the porch over it, the mouldings standing out from the front
+    if (A <= 3.4 && z < (f <= 14.45 ? 0.75 : f <= 15.05 ? 0.5 : f <= CU_STEPS ? 0.25 : 0)) return YM_TRAV
+    const k = cuPorch(a, A, f, z)
+    if (k >= 0) return k
+    return f <= 12.4 ? cuFrontOut(a, A, f, z) : 0
+  }
+  if (f > CU_FRONT - 0.4) return cuFrontWall(a, A, f, z)
+  if (f >= CU_XF) return cuNave(a, A, f, z)
+  if (f >= CU_XB) return cuTransept(a, A, f, z)
+  return cuEast(a, A, f, z)
+}
+/** the front wall itself, f from 11.6 to 12: the door, the rose window, the aisles' windows, the cross on the gable */
+function cuFrontWall(a, A, f, z) {
+  if (A > 7.85) return 0
+  const top = cuFrontTop(A)
+  if (z >= top) {
+    if (f < 11.72) return 0
+    if (A <= 0.12 && z < 15.75) return YM_CREAM
+    return A <= 0.45 && z >= 15.0 && z < 15.15 ? YM_CREAM : 0
+  }
+  if (z < 0.9) return YM_TRAV
+  // the door, deep in its arch, a painted lunette over it
+  if (A < 1.25 && z < 3.9 + Math.sqrt(1.5625 - A * A)) {
+    if (z > 3.9) return f > 11.75 ? 0 : YM_OCHRE
+    if (z > 3.72) return f > 11.85 ? 0 : YM_CREAM
+    return f > 11.68 ? 0 : YM_WOOD
+  }
+  // the rose: twelve spokes and two rings of stone tracery over the glass
+  const rr = Math.hypot(a, z - CU_ROSE)
+  if (rr < 1.55) {
+    const q = Math.atan2(a, z - CU_ROSE) / (Math.PI / 6)
+    const tracery = rr < 0.36 || Math.abs(rr - 1.0) < 0.08 || (rr > 0.36 && Math.abs(q - Math.round(q)) * rr * (Math.PI / 6) < 0.08)
+    if (tracery) return f > 11.88 ? 0 : YM_CREAM
+    return f > 11.7 ? 0 : YM_WINDOW
+  }
+  const dw = A - 6.0
+  if (Math.abs(dw) < 0.42 && z > 2.6 && z < 4.4 + Math.sqrt(Math.max(0, 0.1764 - dw * dw))) return f > 11.75 ? 0 : YM_WINDOW
+  return YM_PEACH
+}
+/** what stands out from the front, f from 12 to 12.4: its plinth, cornices, pilasters, little arches and frames */
+function cuFrontOut(a, A, f, z) {
+  if (A > 7.9) return 0
+  const top = cuFrontTop(A)
+  if (z >= top) return 0
+  if (z >= top - 0.35) return f <= 12.35 ? YM_CREAM : 0
+  if (z < 0.9) return f <= 12.2 ? YM_TRAV : 0
+  if ((A >= 4.15 && A <= 4.85) || A >= 7.15) return f <= 12.22 ? YM_CREAM : 0
+  if (f > 12.14) return 0
+  // a band of little arches under each cornice
+  if (z >= top - 1.0) return lombard(a + 8, top - 0.35 - z, 0.8) ? YM_CREAM : 0
+  // the frames of the rose, the door and the aisles' windows
+  const rr = Math.hypot(a, z - CU_ROSE)
+  if (rr >= 1.55 && rr < 1.95) return YM_CREAM
+  if (A < 1.62 && z < 3.9 + Math.sqrt(Math.max(0, 2.6244 - A * A)) && !(A < 1.25 && z < 3.9 + Math.sqrt(1.5625 - A * A))) return YM_CREAM
+  const dw = A - 6.0
+  if (Math.abs(dw) < 0.56 && z > 2.46 && z < 4.4 + Math.sqrt(Math.max(0, 0.3136 - dw * dw))) {
+    if (!(Math.abs(dw) < 0.42 && z > 2.6 && z < 4.4 + Math.sqrt(Math.max(0, 0.1764 - dw * dw)))) return YM_CREAM
+  }
+  return 0
+}
+/** the porch over the door: two columns, a beam, a little gable roofed in tiles; −1 where it is not */
+function cuPorch(a, A, f, z) {
+  if (A > 2.62 || f > 14.42 || z < 0.75) return -1
+  if (z < 4.6) {
+    const da = Math.abs(A - 1.95)
+    const df = Math.abs(f - 13.85)
+    if (z < 0.95 || z >= 4.3) return Math.max(da, df) <= 0.34 ? YM_CREAM : -1
+    return da * da + df * df <= 0.0625 ? YM_TRAV : -1
+  }
+  if (z < 5.1) return A <= 2.45 && f <= 14.25 ? YM_CREAM : -1
+  const top = 5.4 + (2.62 - A) * 0.6
+  if (z > top) return -1
+  if (z > top - 0.3) return tileAt(f)
+  if (f > 14.25) return z > top - 0.5 ? YM_CREAM : -1
+  return YM_CREAM
+}
+/** the nave and its aisles, f from the transept to the front wall */
+function cuNave(a, A, f, z) {
+  if (A <= CU_NAVE) {
+    if (z < CU_EAVE) {
+      if (A > CU_NAVE - 0.3 && z > 8.5) {
+        // over the aisles' roofs: round windows, and a band of little arches under the cornice
+        if (z > 10.35) return lombard(f + 8, CU_EAVE - z, 0.8) ? YM_CREAM : A > CU_NAVE - 0.12 ? 0 : YM_PEACH
+        const ro = Math.min(Math.hypot(f - 10, z - 9.6), Math.hypot(f - 6, z - 9.6), Math.hypot(f - 2, z - 9.6))
+        if (ro < 0.46) return A > CU_NAVE - 0.18 ? 0 : YM_WINDOW
+        if (ro < 0.6) return YM_CREAM
+      }
+      return YM_PEACH
+    }
+    if (z < CU_EAVE + 0.3) return YM_CREAM
+    const top = CU_EAVE + 0.3 + (4.8 - A) * CU_PITCH
+    if (z > top) return 0
+    return z > top - 0.32 ? tileAt(f) : YM_TILE
+  }
+  // the nave's cornice and its roof's eaves, standing out over the aisles' roofs
+  if (A <= 4.8 && z >= CU_EAVE) {
+    if (z < CU_EAVE + 0.3) return YM_CREAM
+    const top = CU_EAVE + 0.3 + (4.8 - A) * CU_PITCH
+    return z <= top && z > top - 0.32 ? tileAt(f) : 0
+  }
+  // pilaster strips on the nave's wall over the aisles' roofs
+  const strip = Math.abs(f - 8) < 0.3 || Math.abs(f - 4) < 0.3 || Math.abs(f) < 0.3
+  if (A <= 4.65 && z > 8.3 && z < CU_EAVE && strip) return YM_CREAM
+  if (A > CU_AISLE + 0.3) return 0
+  if (z < 0.8) return A <= CU_AISLE + 0.15 ? YM_TRAV : 0
+  if (z < CU_AEAVE) {
+    if (A > CU_AISLE) {
+      const s2 = f > CU_FRONT - 0.75 || f < CU_XF + 0.35 || Math.abs(f - 7) < 0.3 || Math.abs(f - 3) < 0.3 || Math.abs(f + 1) < 0.3
+      return s2 && A <= 7.65 ? YM_CREAM : 0
+    }
+    if (A > CU_AISLE - 0.3) {
+      if (z > 5.75) return lombard(f + 8, CU_AEAVE - z, 0.8) ? YM_CREAM : A > CU_AISLE - 0.12 ? 0 : YM_PEACH
+      for (const fw of [9, 5, 1]) {
+        const dw = f - fw
+        const adw = Math.abs(dw)
+        if (adw < 0.42 && z > 2.4 && z < 4.3 + Math.sqrt(Math.max(0, 0.1764 - dw * dw))) return A > CU_AISLE - 0.15 ? 0 : YM_WINDOW
+        if (adw < 0.56 && z > 2.26 && z < 4.3 + Math.sqrt(Math.max(0, 0.3136 - dw * dw))) return YM_CREAM
+      }
+    }
+    return YM_PEACH
+  }
+  if (z < CU_AEAVE + 0.3) return YM_CREAM
+  // the aisle's roof, leaning on the nave's wall
+  const top = CU_AEAVE + 0.3 + (CU_AISLE + 0.3 - A) * CU_PITCH
+  if (z > top) return 0
+  return z > top - 0.32 ? tileAt(f) : YM_TILE
+}
+/** the transept, f from behind the crossing to the nave: its ends each with a tall window and a round one */
+function cuTransept(a, A, f, z) {
+  if (A > CU_AISLE + 0.3) return 0
+  const df = Math.abs(f - CU_X)
+  if (z < 0.8) return A <= CU_AISLE + 0.15 ? YM_TRAV : 0
+  if (z < CU_EAVE) {
+    if (A > CU_AISLE) return df > 2.65 && A <= 7.65 ? YM_CREAM : 0
+    if (A > CU_AISLE - 0.3) {
+      const dw = f - CU_X
+      if (Math.abs(dw) < 0.6 && z > 3.6 && z < 7.0 + Math.sqrt(Math.max(0, 0.36 - dw * dw))) return A > CU_AISLE - 0.15 ? 0 : YM_WINDOW
+      if (Math.abs(dw) < 0.76 && z > 3.45 && z < 7.0 + Math.sqrt(Math.max(0, 0.5776 - dw * dw))) return YM_CREAM
+      const ro = Math.hypot(dw, z - 9.1)
+      if (ro < 0.55) return A > CU_AISLE - 0.15 ? 0 : YM_WINDOW
+      if (ro < 0.7) return YM_CREAM
+    }
+    if (df > 2.7 && z > 10.35) return lombard(a + 8, CU_EAVE - z, 0.8) ? YM_CREAM : df > 2.88 ? 0 : YM_PEACH
+    return YM_PEACH
+  }
+  if (z < CU_EAVE + 0.3) return YM_CREAM
+  // the roof, its ridge across, a gable at each end
+  const top = CU_EAVE + 0.3 + (3.3 - df) * CU_PITCH
+  if (z > top) return 0
+  if (z > top - 0.32) return tileAt(a)
+  return A > CU_AISLE ? 0 : YM_PEACH
+}
+/** the drum over the crossing (octFace already done for it): its walls, its gallery of little arches, its roof; −1 where it is not */
+function cuDrum(a, f, z) {
+  const D = octD
+  const U = Math.abs(octU)
+  if (z < 17.3) {
+    if (z >= 16.9) return D <= 4.75 ? YM_CREAM : -1
+    if (z >= 14.9 && z < 15.15) return D <= 4.6 ? YM_CREAM : -1
+    if (D > 4.55) return -1
+    if (U >= 1.55) return YM_CREAM // pilaster strips at the corners
+    if (D > 4.4) return -1
+    if (z >= 15.15) {
+      // the gallery: three little arches on each face, dark behind
+      for (const uc of [-1.0, 0, 1.0]) {
+        const du = octU - uc
+        if (Math.abs(du) < 0.32 && z > 15.35 && z < 16.35 + Math.sqrt(Math.max(0, 0.1024 - du * du))) return D > 3.95 ? 0 : YM_WINDOW
+      }
+      return YM_CREAM
+    }
+    if (z > 14.4) return lombard(octU + 4, 14.9 - z, 0.6) ? YM_CREAM : D > 4.28 ? 0 : YM_PEACH
+    const ro = Math.hypot(octU, z - 12.9)
+    if (ro < 0.45) return D > 4.25 ? 0 : YM_WINDOW
+    if (ro < 0.6) return YM_CREAM
+    return YM_PEACH
+  }
+  // a low roof of tiles, eight sided, and a little lantern with a cross on it
+  const top = 17.3 + (4.75 - D) * 0.42
+  if (z <= top) {
+    if (z > top - 0.32) return U > D * 0.414 - 0.12 ? YM_TILE2 : tileAt(octU)
+    return YM_TILE
+  }
+  const g = f - CU_X
+  const r = Math.hypot(a, g)
+  if (z < 19.9) return r < 0.38 ? YM_CREAM : 0
+  if (z < 20.05) return r < 0.48 ? YM_CREAM : 0
+  if (r * r + (z - 20.25) ** 2 <= 0.04) return YM_GOLD
+  if (Math.abs(g) <= 0.07 && ((Math.abs(a) <= 0.07 && z >= 20.3 && z <= 21.3) || (Math.abs(a) <= 0.3 && z >= 20.85 && z <= 20.98))) return YM_IRON
+  return 0
+}
+/** behind the transept: the sacristy on the left, the presbytery, the apse */
+function cuEast(a, A, f, z) {
+  if (a < -3.4 && a >= -7.95 && f >= -13.95) {
+    const k = cuSacristy(-a, f, z)
+    if (k >= 0) return k
+  }
+  const apse = f < CU_PB
+  const r = apse ? Math.hypot(a, f - CU_PB) : A
+  if (r > CU_APSE + 0.3) return 0
+  if (z < 0.8) return r <= CU_APSE + 0.15 ? YM_TRAV : 0
+  // along the wall: round the apse, or back along the presbytery's side
+  const th = apse ? Math.atan2(a, CU_PB - f) : 0
+  const s = apse ? th * CU_APSE : f - (CU_PB + 1.5)
+  if (z < CU_PEAVE) {
+    if (r > CU_APSE) {
+      const strip = apse ? Math.abs(Math.abs(th) - 0.45) * CU_APSE < 0.3 || Math.abs(Math.abs(th) - 1.3) * CU_APSE < 0.3 : f > CU_XB - 0.35 || f < CU_PB + 0.35
+      return strip && r <= CU_APSE + 0.15 ? YM_CREAM : 0
+    }
+    if (r > CU_APSE - 0.3) {
+      if (z > CU_PEAVE - 0.65) return lombard(s + 20, CU_PEAVE - z, 0.7) ? YM_CREAM : r > CU_APSE - 0.12 ? 0 : YM_PEACH
+      for (const sc of apse ? [-3.1, 0, 3.1] : [0]) {
+        const du = s - sc
+        const adu = Math.abs(du)
+        if (adu < 0.42 && z > 3.4 && z < 5.9 + Math.sqrt(Math.max(0, 0.1764 - du * du))) return r > CU_APSE - 0.15 ? 0 : YM_WINDOW
+        if (adu < 0.56 && z > 3.26 && z < 5.9 + Math.sqrt(Math.max(0, 0.3136 - du * du))) return YM_CREAM
+      }
+    }
+    return YM_PEACH
+  }
+  if (z < CU_PEAVE + 0.3) return YM_CREAM
+  // the roofs: a ridge along the presbytery, half a cone over the apse
+  const top = CU_PEAVE + 0.3 + (CU_APSE + 0.3 - r) * (apse ? 0.5 : CU_PITCH)
+  if (z > top) return 0
+  return z > top - 0.32 ? tileAt(apse ? th * 3 : f) : YM_TILE
+}
+/** the sacristy, da across from the middle (3.4 to 7.95, on the left): walls, a window in each outer face, a hipped roof; −1 where it is not */
+function cuSacristy(da, f, z) {
+  const out = Math.max(da - 7.6, -13.6 - f)
+  if (z < 0.8) return out <= 0.15 && f <= CU_XB ? YM_TRAV : -1
+  if (z < 5.2) {
+    if (out > 0 || f > CU_XB) return -1
+    if (out > -0.3) {
+      const side = da - 7.6 > -13.6 - f
+      const du = side ? f + 11.3 : da - 5.6
+      if (Math.abs(du) < 0.4 && z > 2.4 && z < 3.8) return out > -0.15 ? 0 : YM_WINDOW
+      if (Math.abs(du) < 0.54 && z > 2.26 && z < 3.94) return YM_CREAM
+    }
+    return YM_PEACH
+  }
+  if (z < 5.45) return out <= 0.2 && f <= CU_XB + 0.1 ? YM_CREAM : -1
+  const din = Math.min(7.85 - da, f + 13.85, CU_XB + 0.1 - f)
+  if (din < 0) return -1
+  const top = 5.45 + din * 0.5
+  if (z > top) return -1
+  return z > top - 0.32 ? tileAt(da) : YM_TILE
+}
+/** the bell tower, (u, v) across and forward from its middle: 0 where it is not */
+function cuTower(u, v, z) {
+  const au = Math.abs(u)
+  const av = Math.abs(v)
+  const U = Math.max(au, av)
+  if (U > 2.4) return 0
+  const s = au >= av ? v : u // along the face it is nearest
+  const S = Math.abs(s)
+  const corner = au > 1.6 && av > 1.6
+  if (z < 0.8) return U <= 2.15 ? YM_TRAV : 0
+  if (z < 21.6) {
+    if ((z >= 7.4 && z < 7.75) || (z >= 14.6 && z < 14.95)) return U <= 2.15 ? YM_CREAM : 0
+    if (U > 2.0) {
+      if (corner && U <= 2.12) return YM_CREAM
+      // a clock on each face, standing out a little
+      const dc = Math.hypot(s, z - 18.2)
+      if (dc < 1.1 && U <= 2.1) return cuClock(s, z - 18.2, dc)
+      return 0
+    }
+    if (U > 1.85) {
+      if (S < 0.17 && ((z > 4 && z < 5.8) || (z > 10.4 && z < 12.4))) return U > 1.92 ? 0 : YM_WINDOW
+      if (z > 20.95) return lombard(s + 4, 21.6 - z, 0.65) ? YM_CREAM : U > 1.92 ? 0 : YM_PEACH
+      if (S < 1.32 && Math.abs(z - 18.2) < 1.32 && Math.max(S, Math.abs(z - 18.2)) > 1.15) return YM_CREAM
+    }
+    return YM_PEACH
+  }
+  if (z < 22.0) return U <= 2.3 ? YM_CREAM : 0
+  if (z < 25.9) {
+    // the belfry: an arch through each side, the bell hanging in the middle from its beam
+    const r = Math.hypot(u, v)
+    const hb = z - 22.85
+    if (hb >= 0 && hb < 1.7 && r <= cuBell(hb)) return YM_BRONZE
+    if (z >= 24.55 && z < 24.85 && av < 0.14 && au < 1.9) return YM_WOOD
+    if (z >= 24.4 && z < 24.55 && r < 0.12) return YM_IRON
+    if (U > 2.0) return corner && U <= 2.12 ? YM_CREAM : 0
+    const top = 24.6 + Math.sqrt(Math.max(0, 1.21 - S * S))
+    if (z > 22.5 && S < 1.1 && z < top) return 0
+    if (U < 1.6) return z < 22.5 ? YM_TRAV : 0
+    if (S < 1.3 && z > 22.35 && z < top + 0.2) return YM_CREAM
+    return YM_PEACH
+  }
+  if (z < 26.4) return U <= 2.35 ? YM_CREAM : 0
+  if (z < 28.9) {
+    // an octagonal lantern, small arches in its faces, posts at the corners of the terrace round it
+    if (z < 27.0 && au > 1.85 && av > 1.85 && U <= 2.2) return YM_CREAM
+    octFace(u, v)
+    if (octD > 1.6) return 0
+    const ou = Math.abs(octU)
+    if (ou > 0.5) return YM_CREAM
+    if (ou < 0.32 && z > 26.85 && z < 28.1 + Math.sqrt(Math.max(0, 0.1024 - ou * ou))) return octD > 1.35 ? 0 : YM_WINDOW
+    return YM_PEACH
+  }
+  if (z < 29.2) {
+    octFace(u, v)
+    return octD <= 1.8 ? YM_CREAM : 0
+  }
+  // a little grey dome, a gilt ball, an iron cross
+  const r = Math.hypot(u, v)
+  if (z < 30.9 && r <= 1.62 * Math.sqrt(Math.max(0, 1 - ((z - 29.2) / 1.7) ** 2))) return YM_LEAD
+  if (r * r + (z - 31.1) ** 2 <= 0.04) return YM_GOLD
+  if (av <= 0.08 && ((au <= 0.08 && z >= 31.2 && z <= 32.6) || (au <= 0.42 && z >= 31.95 && z <= 32.1))) return YM_IRON
+  return 0
+}
+/** the bell's radius hb up from its lip: the flared lip, the waist, the crown */
+function cuBell(hb) {
+  if (hb < 0.14) return 0.74 - hb * 0.4
+  if (hb < 1.25) return 0.68 - (hb - 0.14) * 0.22
+  return Math.sqrt(Math.max(0, 0.1936 - (hb - 1.25) ** 2)) * 1.1
+}
+/** a clock face: s across and w up from its middle, d out from it; the hands at ten past ten */
+function cuClock(s, w, d) {
+  if (d > 0.95) return YM_IRON
+  if (d > 0.72) {
+    const q = Math.atan2(s, w) / (Math.PI / 6)
+    return Math.abs(q - Math.round(q)) < 0.18 ? YM_IRON : YM_CREAM
+  }
+  for (const [ang, len] of [[-Math.PI / 3, 0.5], [Math.PI / 3, 0.66]]) {
+    const hx = Math.sin(ang)
+    const hy = Math.cos(ang)
+    const t = s * hx + w * hy
+    if (t > -0.05 && t < len && Math.abs(s * hy - w * hx) < 0.07) return YM_IRON
+  }
+  return YM_CREAM
+}
+
+// ── The lakeside fountain: one on the map, in a garden of its own on the shore, after the fountains of the
+// lake's villa gardens. A basin of grey granite, its rim in eight round lobes with a sharp notch between each
+// two, full of pale green water. In its middle a baluster on a round plinth carries a shallow round bowl, and
+// on the bowl a bronze boy holds up a fish whose mouth spouts a jet; the jet falls back into the bowl in four
+// arcs. Out to either side in the basin a bronze boy rides a dolphin rising out of the water, its tail in the
+// air and its mouth spouting a jet in towards the middle (the water is drawn by drawFountainJets). About the
+// basin four clipped box balls on the lawn, and at the back, over the walk in, an arbour of wrought iron: three
+// arched hoops tied together along the top. (a, f, z): across, forward (towards the water), up.
+const FO_R = 6.4 // the inside of the rim at a notch, …
+const FO_LOBE = 1.1 // … how much further out it comes at the middle of a lobe, …
+const FO_RIM = 0.6 // … how thick it is, …
+const FO_RIM_Z = 1.05 // … and how high
+const FO_WATER = 0.7 // the water in the basin
+const FO_BOWL_R = 2.3 // the bowl: how wide, …
+const FO_BOWL_Z = 3.3 // … and the top of its rim
+const FO_BOY_Z = FO_BOWL_Z + 0.35 // the boy stands on a knob in the middle of the bowl, …
+const FO_SPOUT = FO_BOY_Z + 3.1 // … holding up the fish, whose mouth is here
+const FO_DOLPHIN = 2.9 // each dolphin's snout, out from the middle, …
+const FO_DOLPHIN_L = 2.8 // … and how long it is, out to its tail
+const FO_SNOUT_Z = 1.5 // the dolphin's mouth, up
+const FO_HOOPS = [-13, -12, -11] // the arbour's hoops, forward, …
+const FO_ARCH = 2.2 // … how far across its posts stand, …
+const FO_ARCH_Z = 3.4 // … where its arches spring from them
+const FO_BALL = 8.5 // the box balls, out across and forward on the diagonals
+const FO_TOP = FO_SPOUT + 0.3
+/** the inside of the basin's rim, out from the middle at heading th */
+const foRim = (th) => FO_R + FO_LOBE * Math.abs(Math.cos(4 * th))
+/** the square of the distance from (x, y, z) to the segment from (ax, ay, az) to (bx, by, bz) */
+function segD2(x, y, z, ax, ay, az, bx, by, bz) {
+  const ux = bx - ax, uy = by - ay, uz = bz - az
+  const t = Math.min(1, Math.max(0, ((x - ax) * ux + (y - ay) * uy + (z - az) * uz) / (ux * ux + uy * uy + uz * uz)))
+  const dx = x - ax - ux * t, dy = y - ay - uy * t, dz = z - az - uz * t
+  return dx * dx + dy * dy + dz * dz
+}
+function fountainAt(a, f, z) {
+  if (z > FO_TOP) return 0
+  if (f < -10) return foArbour(a, f, z)
+  const A = Math.abs(a)
+  const F = Math.abs(f)
+  // the box balls, a little sunk in the lawn
+  if ((A - FO_BALL) ** 2 + (F - FO_BALL) ** 2 + (z - 0.7) ** 2 < 0.85 * 0.85) return YM_LEAF
+  const r = Math.hypot(a, f)
+  const rin = foRim(Math.atan2(f, a))
+  const rout = rin + FO_RIM
+  if (r > rout + 0.35) return 0
+  if (r > rin) {
+    // the rim: a course at its foot, its wall, and a lip standing out a little at the top
+    if (z < 0.22) return r <= rout + 0.32 ? YM_GRANITE : 0
+    if (z < FO_RIM_Z - 0.22) return r <= rout ? YM_GRANITE : 0
+    if (z < FO_RIM_Z) return r <= rout + 0.14 ? YM_GRANITE : 0
+    return 0
+  }
+  // the middle: a round plinth in the water, a baluster, the bowl, the knob the boy stands on
+  if (z < 1.0 && r <= 1.35) return YM_GRANITE
+  if (z < 1.25 && r <= 1.05) return YM_GRANITE
+  if (z >= 1.25 && z < 2.75) {
+    const t = (z - 1.25) / 1.5
+    const rb = 0.3 + 0.3 * Math.sin(Math.PI * Math.min(1, t * 1.15)) + (t < 0.1 ? 0.22 : 0) + (t > 0.88 ? 0.18 : 0)
+    if (r <= rb) return YM_GRANITE
+  }
+  if (z >= 2.75 && z < FO_BOWL_Z) {
+    // the bowl is curved under, and holds water to just under its rim
+    const rb = 0.55 + (FO_BOWL_R - 0.55) * Math.sqrt((z - 2.75) / (FO_BOWL_Z - 2.75))
+    if (r <= 0.4) return YM_GRANITE
+    if (r <= rb) {
+      if (z > FO_BOWL_Z - 0.32 && r < FO_BOWL_R - 0.2) return z < FO_BOWL_Z - 0.1 ? YM_POND : 0
+      return YM_GRANITE
+    }
+  }
+  if (z >= FO_BOWL_Z && z < FO_BOY_Z && r <= 0.4 - (z - FO_BOWL_Z) * 0.4) return YM_GRANITE
+  if (z >= FO_BOY_Z && r < 1) return foBoy(a, f, z - FO_BOY_Z)
+  // the two dolphins and their riders, out to either side
+  if (A >= FO_DOLPHIN - 0.1 && A <= FO_DOLPHIN + FO_DOLPHIN_L + 0.2 && F < 0.7) {
+    const k = foDolphin(A - FO_DOLPHIN, f, z)
+    if (k) return k
+  }
+  return z < FO_WATER ? YM_POND : 0
+}
+/** the boy on the bowl, standing (z from his feet), holding the fish up over his head, its mouth to the sky */
+function foBoy(a, f, z) {
+  const B = YM_PATINA
+  // his legs, his body and his head
+  if (z < 0.9 && segD2(Math.abs(a), f, z, 0.17, 0, 0, 0.17, 0, 0.9) < 0.15 * 0.15) return B
+  if ((a / 0.34) ** 2 + (f / 0.28) ** 2 + ((z - 1.25) / 0.48) ** 2 < 1) return B
+  if (a * a + f * f + (z - 1.95) ** 2 < 0.27 * 0.27) return B
+  // his arms, up from his shoulders to the fish
+  if (segD2(Math.abs(a), f, z, 0.3, 0, 1.55, 0.14, 0.02, 2.4) < 0.11 * 0.11) return B
+  // the fish, head up, its tail spread under his hands
+  if ((a / 0.2) ** 2 + ((f - 0.04) / 0.22) ** 2 + ((z - 2.65) / 0.48) ** 2 < 1) return B
+  if (z > 2.0 && z < 2.18 && Math.abs(f - 0.04) < 0.09 && Math.abs(a) < 0.12 + (2.18 - z) * 1.5) return B
+  return 0
+}
+/**
+ * a dolphin rising out of the water with a boy on its back: x out from its snout (towards its tail, away
+ * from the middle), y across it, z up
+ */
+function foDolphin(x, y, z) {
+  const B = YM_PATINA
+  const t = x / FO_DOLPHIN_L
+  // its body: down from the snout into the water and up again to the tail, thinning to it
+  const zc = FO_SNOUT_Z - 2.9 * t + 3.5 * t * t
+  const slope = (-2.9 + 7 * t) / FO_DOLPHIN_L
+  const rho = t < 0.1 ? 0.22 + 2.6 * Math.max(0, t) : 0.48 - 0.38 * Math.min(1, (t - 0.1) / 0.9)
+  if (t >= 0 && t <= 1 && y * y + ((z - zc) / Math.sqrt(1 + slope * slope)) ** 2 < rho * rho) return B
+  // the flukes, spread flat at the tip of the tail
+  const zt = FO_SNOUT_Z - 2.9 + 3.5
+  if (t > 0.9 && t < 1.08 && Math.abs(z - zt - 0.1) < 0.1 && Math.abs(y) < 0.65 * (t - 0.9) / 0.18) return B
+  // the boy, astride its back where it dips into the water, facing in, one hand on its head and the other waving
+  const px = x + FO_DOLPHIN
+  const bx = 4.1
+  if (((px - bx) / 0.27) ** 2 + (y / 0.32) ** 2 + ((z - 1.72) / 0.42) ** 2 < 1) return B
+  if ((px - 4.02) ** 2 + y * y + (z - 2.37) ** 2 < 0.25 * 0.25) return B
+  const Y = Math.abs(y)
+  if (segD2(px, Y, z, bx, 0.22, 1.42, 3.85, 0.42, 1.1) < 0.12 * 0.12) return B // his thighs …
+  if (segD2(px, Y, z, 3.85, 0.42, 1.1, 3.95, 0.44, 0.78) < 0.1 * 0.1) return B // … and shins, either side
+  if (segD2(px, y, z, bx, 0.3, 1.98, 3.98, 0.56, 2.7) < 0.1 * 0.1) return B // the arm waving
+  if (segD2(px, y, z, bx, -0.3, 1.98, 3.3, -0.2, 1.6) < 0.1 * 0.1) return B // the hand on its head
+  return 0
+}
+/** the arbour over the walk in at the back: three hoops of wrought iron, tied along the top and the sides */
+function foArbour(a, f, z) {
+  const A = Math.abs(a)
+  const T = 0.13 // the iron's half thickness
+  // a granite foot under each post
+  if (z < 0.3 && Math.abs(A - FO_ARCH) < 0.24 && FO_HOOPS.some((h) => Math.abs(f - h) < 0.24)) return YM_GRANITE
+  const r = Math.hypot(a, z - FO_ARCH_Z)
+  const onHoop = (z < FO_ARCH_Z ? Math.abs(A - FO_ARCH) < T : Math.abs(r - FO_ARCH) < T)
+  if (onHoop && FO_HOOPS.some((h) => Math.abs(f - h) < T)) return YM_IRON
+  // the ties along it: at the crown, half way down each arch, at the springs
+  if (f > FO_HOOPS[0] - T && f < FO_HOOPS[2] + T && z >= FO_ARCH_Z - T) {
+    const s = Math.SQRT1_2 * FO_ARCH
+    if (A < T && Math.abs(z - FO_ARCH_Z - FO_ARCH) < T) return YM_IRON
+    if (Math.abs(A - s) < T && Math.abs(z - FO_ARCH_Z - s) < T) return YM_IRON
+    if (Math.abs(A - FO_ARCH) < T && Math.abs(z - FO_ARCH_Z) < T) return YM_IRON
+  }
+  // a ring of scrollwork in each hoop's crown
+  if (FO_HOOPS.some((h) => Math.abs(f - h) < T) && Math.abs(Math.hypot(a, z - FO_ARCH_Z - FO_ARCH + 0.6) - 0.48) < T * 0.9) return YM_IRON
+  return 0
+}
+
+// The chapel, the temple, the museum, the church and the fountain are built the same way, at three levels of detail, far to near.
 const MON_LOD = [0.5, 0.25, 0.125]
 const MONUMENTS = {
   chapel: { at: chapelAt, side: 6.1, back: 6.1, fore: 7.1, top: CH_TOP, reach: 15, mid: 9, models: [], build: null },
   temple: { at: templeAt, side: 5.1, back: 1.8, fore: 2.1, top: TP_TOP, reach: 8, mid: 5.5, models: [], build: null },
   museum: { at: museumAt, side: 14.5, back: 7.5, fore: 9.1, top: MU_TOP, reach: 17, mid: 6, models: [], build: null },
+  church: { at: churchAt, side: 8.3, back: 16, fore: 15.8, top: CU_TOP, reach: 28, mid: 12, models: [], build: null },
+  fountain: { at: fountainAt, side: FO_BALL + 0.9, back: -FO_HOOPS[0] + 0.3, fore: FO_BALL + 0.9, top: FO_TOP, reach: 16, mid: 3, models: [], build: null },
 }
 /**
  * the surface voxels of a monument at size g, normals from which of their neighbours are empty. It fills
@@ -1746,8 +2288,8 @@ export function createScene(initial) {
     foamCol = pack(fm[0], fm[1], fm[2])
     for (let k = 0; k < NYM; k++) {
       const pale = k === YM_SAIL || k === 12 || k === 7 || k === YM_HULL
-      // the chapel, the temple and the museum take the light as the ground does, a little less, so they stand out from it
-      const stone = k >= YM_TRAV && k <= YM_BANNER
+      // the chapel, the temple, the museum, the church and the fountain take the light as the ground does, a little less, so they stand out from it
+      const stone = (k >= YM_TRAV && k <= YM_BANNER) || (k >= YM_PEACH && k <= YM_PATINA)
       let c = stone ? gradeT(YACHT_COL[k], 0.8, 0.85) : gradeT(YACHT_COL[k], 0.42, pale ? 0.22 : 0.32)
       // the fountains are lit from under the water at night
       if (k === YM_SPRAY) c = toward(c, [196, 232, 255], lampK * 0.8)
@@ -1828,13 +2370,16 @@ export function createScene(initial) {
   const birds = []
   // what a cell is part of, so one layout never runs over another:
   // 1 a house and its yard · 2 a villa garden · 3 a lakeside terrace, promenade, path or the chapel's
-  // garden, the temple's lawn and the museum's grounds · 4 a monument: the chapel, the temple or the museum
+  // garden, the temple's lawn, the museum's grounds, the church's square and the fountain's garden · 4 a
+  // monument: the chapel, the temple, the museum, the church or the fountain
   const parkMap = new Uint8Array(N * N)
   // the chapel and the temple: the middle of each, its floor and the way it faces (null if none would
   // fit), and how high they stand over each cell of their footprints, for the plane, the bombs and the camera
   let chapel = null
   let temple = null
   let museum = null
+  let church = null
+  let lakeFountain = null
   const monumentTop = new Map()
   let gardenN = 0
   let flowerN = 0
@@ -1977,6 +2522,8 @@ export function createScene(initial) {
     placeChapel()
     placeTemple()
     placeMuseum()
+    placeChurch()
+    placeFountain()
     placeLamps()
     placeBoats(rnd)
     placeLife(rnd)
@@ -1998,6 +2545,8 @@ export function createScene(initial) {
       chapel: chapel ? [chapel.x | 0, chapel.y | 0] : null,
       temple: temple ? [temple.x | 0, temple.y | 0] : null,
       museum: museum ? [museum.x | 0, museum.y | 0] : null,
+      church: church ? [church.x | 0, church.y | 0] : null,
+      fountain: lakeFountain ? [lakeFountain.x | 0, lakeFountain.y | 0] : null,
       props: props.length,
       flowers: flowerN,
       spawn: [spawnX | 0, spawnY | 0],
@@ -3182,7 +3731,8 @@ export function createScene(initial) {
         else if (what === 'water') m = M_POOL
         else if (what === 'cone') { m = 36; h = base + 3; cones++ }
         matMap[o] = m
-        heightMap[o] = floorMap[o] = h
+        heightMap[o] = h
+        floorMap[o] = what === 'hedge' ? base : h // the hedge is walked through, on the lawn under it
         parkMap[o] = 3
       }
     }
@@ -3694,6 +4244,380 @@ export function createScene(initial) {
     return rock && mine < rock.cells.size ? -1 : base
   }
 
+  // The lake church: one on the map, on the shore with its front to the water, as the lake's churches stand
+  // over their landing places. It looks along the shores for a stretch with open water before it and open,
+  // fairly level land behind, near villas and the start and well away from the other monuments, and levels
+  // it: the church; a lawn round it with a paved walk about the walls and cypresses down its sides; and before
+  // the steps a paved square out to a quay at the water's edge, a balustrade along the water with an urn on
+  // every other post, two benches looking out over the lake, a lamp either side of the steps; a gravel path
+  // on to the nearest villa. Like the chapel it takes nothing from the random stream.
+  const CG_A = 12 // its grounds reach this far across from its middle, …
+  const CG_B = -19 // … this far behind it, …
+  const CG_SQ = 16 // … and the square runs from the foot of the steps …
+  const CG_Q = 22 // … to the shore, about this far forward …
+  const CG_REACH = 26 // … and no further, where the land runs on
+  /**
+   * which cells a monument stands over, of a0…a1 across and f0…f1 forward: those it covers anywhere near
+   * the ground or at a man's height; as (a, f) → true
+   */
+  function footprint(at, a0, a1, f0, f1) {
+    const w = a1 - a0 + 1
+    const on = new Uint8Array(w * (f1 - f0 + 1))
+    for (let f = f0; f <= f1; f++) {
+      for (let a = a0; a <= a1; a++) {
+        let hit = 0
+        for (const [da, df] of [[0, 0], [-0.45, -0.45], [0.45, -0.45], [-0.45, 0.45], [0.45, 0.45]]) {
+          for (const z of [0.1, 2.5, 7]) if (at(a + da, f + df, z)) hit = 1
+        }
+        on[(f - f0) * w + a - a0] = hit
+      }
+    }
+    return (a, f) => a >= a0 && a <= a1 && f >= f0 && f <= f1 && on[(f - f0) * w + a - a0] === 1
+  }
+  /**
+   * the places along the shores for a monument whose middle stands back from the last land, facing out over
+   * open water, at least apart from the other monuments: { cx, cy, yaw }, best first by how many villas are
+   * near (up to four), how near the start, and what bonus(yaw) adds
+   */
+  function shoreSites(back, apart, bonus) {
+    const others = [chapel, temple, museum, church].filter(Boolean)
+    const villas = houses.filter(isVilla).map(mid)
+    const sites = []
+    for (let y = 0; y < N; y += 4) {
+      for (let x = 0; x < N; x += 4) {
+        if (matMap[(y << NSHIFT) | x] < 4) continue
+        for (let k = 0; k < 4; k++) {
+          const ex = k === 0 ? 1 : k === 1 ? -1 : 0
+          const ey = k === 2 ? 1 : k === 3 ? -1 : 0
+          // the last land before the water this way, and open water on out from it
+          if (matAt(x + ex, y + ey) >= 4) continue
+          let open = true
+          for (let d = 3; d <= 42 && open; d += 3) if (matAt(x + ex * d, y + ey * d) >= 4) open = false
+          if (!open) continue
+          const cx = (x - ex * back) & NM
+          const cy = (y - ey * back) & NM
+          if (others.some((m) => wrapDelta(m.x, cx) ** 2 + wrapDelta(m.y, cy) ** 2 < apart * apart)) continue
+          let near = 0
+          for (const [vx, vy] of villas) if (wrapDelta(vx, cx) ** 2 + wrapDelta(vy, cy) ** 2 < 110 * 110) near++
+          // its front faces (sin yaw, −cos yaw), out to the water
+          const yaw = Math.atan2(ex, -ey)
+          const score = Math.min(near, 4) * 3 + bonus(yaw) - Math.hypot(wrapDelta(cx, spawnX), wrapDelta(cy, spawnY)) / 25
+          sites.push({ cx, cy, yaw, score })
+        }
+      }
+    }
+    return sites.sort((p, q) => q.score - p.score)
+  }
+  /** the commonest floor under a0…a1 across and f0…f1 forward of cell(), every other cell */
+  function commonFloor(cell, a0, a1, f0, f1) {
+    const count = new Map()
+    for (let f = f0; f <= f1; f += 2) {
+      for (let a = a0; a <= a1; a += 2) {
+        const h = floorMap[cell(a, f)]
+        count.set(h, (count.get(h) || 0) + 1)
+      }
+    }
+    let base = -1
+    let most = 0
+    for (const [h, n] of count) if (n > most) { most = n; base = h }
+    return base
+  }
+  /** the nearest villa's middle to (cx, cy), or null */
+  function nearestVilla(cx, cy) {
+    let near = null
+    let nd = 1e9
+    for (const h of houses) {
+      if (!isVilla(h)) continue
+      const [hx, hy] = mid(h)
+      const d = Math.hypot(wrapDelta(hx, cx), wrapDelta(hy, cy))
+      if (d < nd) { nd = d; near = [hx, hy] }
+    }
+    return near
+  }
+  /** a cell the shore monuments will not build on: a house's, a garden's, a building, a mountain, a dock, a cypress */
+  const shoreTaken = (o, m) => houseMap[o] || parkMap[o] || isBuilt(m) || isPeak(m) || m === 25 || m === 26 || m === 34
+  function placeChurch() {
+    church = null
+    const isChurchCell = footprint(churchAt, -CG_A, CG_A, CG_B, CG_SQ - 1)
+    const cands = shoreSites(CG_Q, 90, sunward)
+    let best = null
+    for (let i = 0; i < cands.length && i < 4000 && !best; i++) {
+      const site = churchSite(cands[i].cx, cands[i].cy, cands[i].yaw)
+      if (site) best = { ...cands[i], ...site }
+    }
+    if (!best) {
+      worldLog.warn('no room for the church', { shores: cands.length })
+      return
+    }
+    const { cx, cy, yaw, base, ends } = best
+    const cell = turned(cx, cy, yaw)
+    const M = MONUMENTS.church
+    // the church, and lawn round it, with a paved walk along its walls
+    for (let f = CG_B; f < CG_SQ; f++) {
+      for (let a = -CG_A; a <= CG_A; a++) {
+        const o = cell(a, f)
+        if (isChurchCell(a, f)) { monumentCell(o, base, M, a, f); continue }
+        const by = isChurchCell(a + 1, f) || isChurchCell(a - 1, f) || isChurchCell(a, f + 1) || isChurchCell(a, f - 1)
+        matMap[o] = by ? 51 : M_LAWN
+        heightMap[o] = floorMap[o] = base
+        parkMap[o] = 3
+      }
+    }
+    // the square, out to the water: a darker border, a band down its middle to the door, and the quay's
+    // balustrade along the water with a post every fourth cell
+    const c = Math.round(Math.cos(yaw))
+    const s = Math.round(Math.sin(yaw))
+    const at = (a, f) => [cx + 0.5 + a * c + f * s, cy + 0.5 + a * s - f * c]
+    let quay = 0
+    let urns = 0
+    for (let a = -CG_A; a <= CG_A; a++) {
+      const end = ends[a + CG_A]
+      const A = Math.abs(a)
+      for (let f = CG_SQ; f <= end; f++) {
+        const o = cell(a, f)
+        let m = A <= 1 || A === CG_A ? 52 : 51
+        let h = base
+        if (f === end && end < CG_REACH) {
+          const post = a % 4 === 0 || A === CG_A
+          m = post ? M_PLINTH : 35
+          h = base + (post ? 2 : 1)
+          quay++
+          if (post && (a / 4) % 2 === 0) {
+            const [x, y] = at(a, f)
+            props.push({ kind: P_URN, x, y, z: h, yaw, alive: true })
+            urns++
+          }
+        }
+        matMap[o] = m
+        heightMap[o] = floorMap[o] = h
+        parkMap[o] = 3
+      }
+    }
+    // two benches looking out over the lake, a lamp either side of the steps
+    for (const a of [-6, 6]) {
+      const end = ends[a + CG_A]
+      if (end - 1 <= CG_SQ + 1) continue
+      const [x, y] = at(a, end - 1)
+      props.push({ kind: P_BENCH, x, y, z: base, yaw, alive: true })
+    }
+    for (const a of [-4, 4]) {
+      const [x, y] = at(a, CG_SQ + 1)
+      props.push({ kind: P_LAMP, x, y, z: base, yaw, alive: true })
+    }
+    // cypresses down either side of the church
+    for (const a of [-CG_A + 1, CG_A - 1]) {
+      for (let f = -15; f <= 12; f += 5) {
+        const o = cell(a, f)
+        if (matMap[o] !== M_LAWN) continue
+        matMap[o] = 34
+        heightMap[o] = base + 8 + ((a + f) & 1)
+      }
+    }
+    // the trees round it are cleared, and a gravel path goes from behind it on to the nearest villa
+    clearRound(cell, -CG_A, CG_A, CG_B, CG_SQ, CLEARING)
+    const near = nearestVilla(cx, cy)
+    const [px, py] = at(0, CG_B - 1)
+    const pathN = near ? gravelPath(Math.floor(px), Math.floor(py), near[0], near[1], base, PATH_CLEAR) : 0
+    church = { x: cx + 0.5, y: cy + 0.5, z: base, yaw }
+    monumentModel(M, 0)
+    monumentModel(M, 1)
+    worldLog.info('church', {
+      at: [cx, cy], shores: cands.length, quay, urns, path: pathN,
+      fromSpawn: Math.round(Math.hypot(wrapDelta(cx, spawnX), wrapDelta(cy, spawnY))),
+    })
+  }
+  /**
+   * the floor the church would stand on at (cx, cy), its front towards yaw and the water, and how far forward
+   * its square reaches in each column across; null if the ground will not do
+   */
+  function churchSite(cx, cy, yaw) {
+    const cell = turned(cx, cy, yaw)
+    const base = commonFloor(cell, -7, 7, -14, 14)
+    if (base < 1) return null
+    for (let f = CG_B; f < CG_SQ; f++) {
+      for (let a = -CG_A; a <= CG_A; a++) {
+        const o = cell(a, f)
+        const m = matMap[o]
+        if (m < 4 || shoreTaken(o, m)) return null
+        if (Math.abs(floorMap[o] - base) > (Math.abs(a) <= 8 ? 3 : 4)) return null
+      }
+    }
+    // the square, on along each column to the water, which must come within reach in the middle, and not at once
+    const ends = []
+    for (let a = -CG_A; a <= CG_A; a++) {
+      let f = CG_SQ
+      for (; f <= CG_REACH; f++) {
+        const o = cell(a, f)
+        const m = matMap[o]
+        if (m < 4) break
+        if (shoreTaken(o, m) || Math.abs(floorMap[o] - base) > 4) return null
+      }
+      const A = Math.abs(a)
+      if (A <= 6 && f > CG_REACH) return null
+      if (A <= 4 && f < CG_SQ + 3) return null
+      ends.push(f - 1)
+    }
+    return { base, ends }
+  }
+
+  // The lakeside fountain (fountainAt): one on the map, in a public garden of its own on a shore well away
+  // from the church, near villas and the start. A box hedge round three sides of a clipped lawn, open to the
+  // lake on the fourth, where a low stone parapet runs along the water with a gravel walk inside it; the
+  // fountain in the middle with a gravel walk round its basin, a walk in from the back under the iron arbour
+  // and on to the parapet, two benches by the basin looking at it and two on the walk looking out over the
+  // lake, a lamp either side of the way in, an urn on a post either side where the walk meets the parapet, a
+  // tall larch and a chestnut in the back corners, and a gravel path on to the nearest villa. Like the chapel
+  // it takes nothing from the random stream.
+  const FG_A = 12 // its hedge runs this far across from the fountain, …
+  const FG_B = -15 // … and this far behind it; …
+  const FG_LAND = 13 // … the land must run at least this far forward of it in every column, …
+  const FG_Q = 16 // … the shore is about this far forward …
+  const FG_REACH = 20 // … and no further in the middle
+  function placeFountain() {
+    lakeFountain = null
+    const isFountainCell = footprint(fountainAt, -FG_A, FG_A, FG_B, FG_LAND)
+    const cands = shoreSites(FG_Q, 140, () => 0)
+    let best = null
+    for (let i = 0; i < cands.length && i < 4000 && !best; i++) {
+      const site = fountainSite(cands[i].cx, cands[i].cy, cands[i].yaw)
+      if (site) best = { ...cands[i], ...site }
+    }
+    if (!best) {
+      worldLog.warn('no room for the fountain', { shores: cands.length })
+      return
+    }
+    const { cx, cy, yaw, base, ends } = best
+    const cell = turned(cx, cy, yaw)
+    const M = MONUMENTS.fountain
+    const c = Math.round(Math.cos(yaw))
+    const s = Math.round(Math.sin(yaw))
+    const at = (a, f) => [cx + 0.5 + a * c + f * s, cy + 0.5 + a * s - f * c]
+    /** the yaw of a prop facing (da, df) of the garden */
+    const facingOf = (da, df) => Math.atan2(da * c + df * s, -(da * s - df * c))
+    /** on the gravel walk round the basin */
+    const ring = (a, f) => {
+      const r = Math.hypot(a, f)
+      const rout = foRim(Math.atan2(f, a)) + FO_RIM
+      return r > rout + 0.2 && r <= rout + 2.4
+    }
+    let urns = 0
+    for (let a = -FG_A; a <= FG_A; a++) {
+      const end = ends[a + FG_A]
+      const A = Math.abs(a)
+      for (let f = FG_B; f <= end; f++) {
+        const o = cell(a, f)
+        if (isFountainCell(a, f)) {
+          monumentCell(o, base, M, a, f)
+          // the box balls stand on the lawn; the basin and the arbour's posts on the gravel of the walks
+          const ball = Math.hypot(Math.abs(a) - FO_BALL, Math.abs(f) - FO_BALL) < 1.6
+          matMap[o] = ball ? M_LAWN : (a + f) & 1 ? 4 : 5
+          continue
+        }
+        const water = f === end && end < FG_REACH
+        let m = M_LAWN
+        let h = base
+        if (water) {
+          // the parapet along the water, with a post and an urn either side of the walk
+          const post = A === 2
+          m = post ? M_PLINTH : M_STONE
+          h = base + (post ? 2 : 1)
+          if (post) {
+            const [x, y] = at(a, f)
+            props.push({ kind: P_URN, x, y, z: h, yaw, alive: true })
+            urns++
+          }
+        } else if (A === FG_A || f === FG_B || f === end) {
+          // the hedge, with a gap for the walk in at the back
+          if (f === FG_B && A <= 1) m = (a + f) & 1 ? 4 : 5
+          else { m = M_HEDGE; h = base + 1 }
+        } else if (ring(a, f) || A <= 1 || f >= end - 2) m = (a + f) & 1 ? 4 : 5
+        matMap[o] = m
+        heightMap[o] = floorMap[o] = h
+        parkMap[o] = 3
+      }
+    }
+    // two benches by the basin, either side, looking at it; two on the walk by the parapet looking out over the lake
+    let benches = 0
+    for (const sg of [-1, 1]) {
+      const [x, y] = at(sg * 9.6, 0)
+      props.push({ kind: P_BENCH, x, y, z: base, yaw: facingOf(-sg, 0), alive: true })
+      benches++
+      const end = ends[sg * 6 + FG_A]
+      if (end < FG_REACH) {
+        const [bx, by] = at(sg * 6, end - 1)
+        props.push({ kind: P_BENCH, x: bx, y: by, z: base, yaw, alive: true })
+        benches++
+      }
+    }
+    // a lamp either side of the way in
+    for (const sg of [-1, 1]) {
+      const [x, y] = at(sg * 3.5, FG_B + 1)
+      props.push({ kind: P_LAMP, x, y, z: base, yaw, alive: true })
+    }
+    // a tall larch in one back corner, a round-crowned chestnut in the other
+    const tree = (a0, f0, r, tall, mats) => {
+      const ri = Math.ceil(r)
+      for (let df = -ri; df <= ri; df++) {
+        for (let da = -ri; da <= ri; da++) {
+          const d = Math.hypot(da, df)
+          if (d > r + 0.3) continue
+          const o = cell(a0 + da, f0 + df)
+          if (matMap[o] !== M_LAWN) continue
+          const q = d / (r + 0.5)
+          const rise = mats === TREE_KINDS[1] ? Math.round((1 - q) * tall) : Math.round(Math.sqrt(Math.max(0, 1 - q * q)) * tall)
+          heightMap[o] = base + 1 + rise
+          matMap[o] = d < 1.1 ? mats[0] : d < r - 0.5 ? mats[1] : mats[2]
+        }
+      }
+    }
+    tree(-9, -11, 1.7, 12, TREE_KINDS[1])
+    tree(9, -11, 2.4, 5, TREE_KINDS[2])
+    // the trees round it are cleared, and a gravel path goes from the way in on to the nearest villa
+    clearRound(cell, -FG_A, FG_A, FG_B, FG_LAND, CLEARING)
+    const near = nearestVilla(cx, cy)
+    const [px, py] = at(0, FG_B - 1)
+    const pathN = near ? gravelPath(Math.floor(px), Math.floor(py), near[0], near[1], base, PATH_CLEAR) : 0
+    lakeFountain = { x: cx + 0.5, y: cy + 0.5, z: base, yaw }
+    monumentModel(M, 0)
+    monumentModel(M, 1)
+    worldLog.info('fountain', {
+      at: [cx, cy], shores: cands.length, urns, benches, path: pathN,
+      fromSpawn: Math.round(Math.hypot(wrapDelta(cx, spawnX), wrapDelta(cy, spawnY))),
+      fromChurch: church ? Math.round(Math.hypot(wrapDelta(church.x, cx), wrapDelta(church.y, cy))) : null,
+    })
+  }
+  /**
+   * the floor the fountain's garden would stand on at (cx, cy), open to the water towards yaw, and how far
+   * forward it reaches in each column across; null if the ground will not do
+   */
+  function fountainSite(cx, cy, yaw) {
+    const cell = turned(cx, cy, yaw)
+    const base = commonFloor(cell, -9, 9, -12, 10)
+    if (base < 1) return null
+    for (let f = FG_B; f <= FG_LAND; f++) {
+      for (let a = -FG_A; a <= FG_A; a++) {
+        const o = cell(a, f)
+        const m = matMap[o]
+        if (m < 4 || shoreTaken(o, m)) return null
+        if (Math.abs(floorMap[o] - base) > (Math.abs(a) <= 9 && f <= 10 ? 2 : 3)) return null
+      }
+    }
+    // on along each column to the water, which must come within reach in the middle
+    const ends = []
+    for (let a = -FG_A; a <= FG_A; a++) {
+      let f = FG_LAND + 1
+      for (; f <= FG_REACH; f++) {
+        const o = cell(a, f)
+        const m = matMap[o]
+        if (m < 4) break
+        if (shoreTaken(o, m) || Math.abs(floorMap[o] - base) > 3) return null
+      }
+      if (Math.abs(a) <= 4 && f > FG_REACH) return null
+      ends.push(f - 1)
+    }
+    return { base, ends }
+  }
+
   // a garden lamp by the end of every bench, a little behind it, so the gardens, the terraces and the
   // promenades are lit at night. It takes nothing from the random stream: the rest stays as it was.
   function placeLamps() {
@@ -3993,6 +4917,8 @@ export function createScene(initial) {
   const walker = { x: 0, y: 0, yaw: 0, z: 0 }
   // inside the museum: the man walks its gallery, drawn by its own renderer (museum-room.ts)
   const room = createMuseumRoom()
+  const churchRoom = createChurchRoom()
+  let roomNow = room // the one he is in, while indoors
   let indoors = false
   let onFoot = false
   let footView = 0 // 0 overhead third person, 1 first person
@@ -4445,13 +5371,15 @@ export function createScene(initial) {
     const m = matMap[o]
     // a tree (trunk, canopy, a cypress) does not stop anyone: it is walked through, on the ground under it
     if (isBuilt(m)) return false
-    if (m === M_HEDGE || m === M_POOL || m === M_PLINTH) return false // the hedge, the fountain, a statue
+    // a hedge with ground under it (the chapel's) is walked through like a tree; the others stop him
+    if (m === M_HEDGE && floorMap[o] === heightMap[o]) return false
+    if (m === M_POOL || m === M_PLINTH) return false // the fountain, a statue
     return m >= 4
   }
   function walkFloor(x, y) {
     const o = (((y | 0) & NM) << NSHIFT) | ((x | 0) & NM)
     const m = matMap[o]
-    if (isTree(m) || m === 34) return floorMap[o]
+    if (isTree(m) || m === 34 || m === M_HEDGE) return floorMap[o]
     return heightMap[o]
   }
   function nearestStand(x, y, reach, spawn) {
@@ -5017,7 +5945,10 @@ export function createScene(initial) {
   function stepFoot(dt) {
     if (!onFoot) return
     if (indoors) {
-      if (room.step(dt, walkTurn, walkMove, walkSide)) leaveMuseum()
+      if (roomNow.step(dt, walkTurn, walkMove, walkSide)) {
+        if (roomNow === churchRoom) leaveChurch()
+        else leaveMuseum()
+      }
       return
     }
     if (aboard >= 0) {
@@ -5068,6 +5999,10 @@ export function createScene(initial) {
         enterMuseum()
         return
       }
+      if (atChurchDoor(nx, ny)) {
+        enterChurch()
+        return
+      }
       if (canStep(walker.x, walker.y, nx, ny)) {
         walker.x = wrapPos(nx)
         walker.y = wrapPos(ny)
@@ -5092,6 +6027,7 @@ export function createScene(initial) {
   }
   function enterMuseum() {
     indoors = true
+    roomNow = room
     benchEnd()
     room.enter()
     footLog.info('into the museum')
@@ -5108,6 +6044,42 @@ export function createScene(initial) {
     walker.yaw = museum.yaw
     walker.z = walkFloor(walker.x, walker.y)
     footLog.info('out of the museum')
+  }
+
+  /** (x, y) in the lake church's own across and forward (the door is at +f, towards the water) */
+  function churchLocal(x, y) {
+    const c = Math.round(Math.cos(church.yaw))
+    const s = Math.round(Math.sin(church.yaw))
+    const dx = wrapDelta(x, church.x)
+    const dy = wrapDelta(y, church.y)
+    return [dx * c + dy * s, dx * s - dy * c]
+  }
+  /** a step to (x, y) goes up the church's steps, under the porch and in at the door */
+  function atChurchDoor(x, y) {
+    if (!church) return false
+    const [a, f] = churchLocal(x, y)
+    return Math.abs(a) <= 3.4 && f > CU_FRONT + 0.4 && f < CU_DOOR_F
+  }
+  function enterChurch() {
+    indoors = true
+    roomNow = churchRoom
+    benchEnd()
+    churchRoom.enter()
+    footLog.info('into the church')
+  }
+  /** out through the door: on the square at the foot of the steps, facing the lake */
+  function leaveChurch() {
+    indoors = false
+    roomNow = room
+    if (!church) return
+    const c = Math.round(Math.cos(church.yaw))
+    const s = Math.round(Math.sin(church.yaw))
+    const f = CU_DOOR_F + 0.7
+    walker.x = wrapPos(church.x + f * s)
+    walker.y = wrapPos(church.y - f * c)
+    walker.yaw = church.yaw
+    walker.z = walkFloor(walker.x, walker.y)
+    footLog.info('out of the church')
   }
 
   // How far the water runs from (x, y) along a heading, checking the bow line and, close in, the beam.
@@ -7633,6 +8605,58 @@ export function createScene(initial) {
     if (chapel) drawMonument(chapel, MONUMENTS.chapel)
     if (temple) drawMonument(temple, MONUMENTS.temple)
     if (museum) drawMonument(museum, MONUMENTS.museum)
+    if (church) drawMonument(church, MONUMENTS.church)
+    if (lakeFountain) {
+      drawMonument(lakeFountain, MONUMENTS.fountain)
+      drawFountainJets(lakeFountain)
+    }
+  }
+  /**
+   * the lakeside fountain's water, in drops of spray: the jet up from the fish's mouth falling back into the
+   * bowl in four arcs, and each dolphin's jet in towards the middle, splashing where it meets the basin; the
+   * basin lit from under the water at night
+   */
+  function drawFountainJets(mo) {
+    const x = mo.x - N * Math.round((mo.x - cam.x) / N)
+    const y = mo.y - N * Math.round((mo.y - cam.y) / N)
+    if ((x - cam.x) ** 2 + (y - cam.y) ** 2 > 600 * 600 || !project(x, y, mo.z + 3)) return
+    const reach = prM * 9 + 4
+    if (prX < -reach || prX > W + reach || prY < -reach * 1.2 || prY > H + reach) return
+    ensureAkey()
+    rigN = 0
+    const t = time + mo.x * 0.37
+    for (let k = 0; k < 5; k++) {
+      if (((k + ((t * 12) | 0)) & 3) === 0) continue // drops, not a solid rod
+      rigVox(0, 0, FO_SPOUT + 0.1 + k * 0.2, YM_SPRAY, 0, 0, 1)
+    }
+    // from the top of the jet out and down to the bowl, landing just inside its rim
+    const fall = FO_SPOUT + 1.5 - FO_BOWL_Z + 0.1
+    for (let arm = 0; arm < 4; arm++) {
+      const an = arm * (Math.PI / 2) + Math.PI / 4
+      const ca = Math.cos(an)
+      const sa = Math.sin(an)
+      for (let i = 0; i < 7; i++) {
+        const u = (i / 7 + t * 0.7) % 1
+        const r = 0.15 + u * (FO_BOWL_R - 0.6)
+        rigVox(ca * r, sa * r, FO_SPOUT + 1.0 + 0.5 * u - fall * u * u, YM_SPRAY, ca, sa, 0.6)
+      }
+    }
+    // each dolphin's jet, up from its mouth and down into the basin before the plinth
+    for (const sg of [-1, 1]) {
+      const a0 = sg * (FO_DOLPHIN - 0.05)
+      for (let i = 0; i < 8; i++) {
+        const u = (i / 8 + t * 0.9 + (sg > 0 ? 0.5 : 0)) % 1
+        rigVox(a0 - sg * 1.3 * u, 0, FO_SNOUT_Z + 4.4 * u * (1 - u) - (FO_SNOUT_Z - FO_WATER) * u, YM_SPRAY, -sg, 0, 0.5)
+      }
+      for (let i = 0; i < 3; i++) {
+        if (((i + ((t * 10) | 0)) % 3) === 0) continue
+        rigVox(a0 - sg * (1.3 + (i - 1) * 0.15), (i - 1) * 0.18, FO_WATER + 0.12, YM_SPRAY, 0, 0, 1)
+      }
+    }
+    voxBegin(x, y, mo.z, mo.yaw, 0, 0, 0.2)
+    rasterVox(rigA, rigF, rigZ, rigNA, rigNF, rigNZ, rigK, rigN)
+    voxEnd()
+    if (lampK > 0) lampGlow(x, y, mo.z + FO_BOWL_Z, 3.2, FOUNTAIN_GLOW, 0.4 * lampOn(hash8(((mo.x * 8) | 0) * 7919 + ((mo.y * 8) | 0))))
   }
   function drawMonument(mo, M) {
     const x = mo.x - N * Math.round((mo.x - cam.x) / N)
@@ -8286,7 +9310,7 @@ export function createScene(initial) {
     if (W === 0) return bytes
     if (onFoot && indoors && !devOn) {
       flameOut.count = 0
-      room.render(fb, W, H, lampK)
+      roomNow.render(fb, W, H, lampK)
       return bytes
     }
     updateView()
@@ -8434,6 +9458,8 @@ export function createScene(initial) {
     get onFoot() { return onFoot },
     /** walking the gallery inside the museum */
     get indoors() { return onFoot && indoors },
+    /** which building he is inside, while indoors: 'museum' or 'church' */
+    get indoorsAt() { return onFoot && indoors ? (roomNow === churchRoom ? 'church' : 'museum') : null },
     get aboard() { return aboard >= 0 },
     get footView() { return footView === 1 ? 'first' : 'above' },
     /** the boat you are in is under way */
